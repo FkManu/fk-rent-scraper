@@ -225,12 +225,27 @@ def _reset_guard_state(path: Path, search_urls: list[str]) -> None:
                 "last_success_utc": "",
                 "last_recovery_utc": "",
                 "last_valid_channel": "",
+                "last_attempt_channel": "",
+                "last_block_family": "",
+                "last_block_code": "",
+                "warmup_active": True,
+                "warmup_started_utc": "",
+                "warmup_completed_utc": "",
+                "warmup_failures": 0,
+                "warmup_last_failures": 0,
                 "consecutive_successes": 0,
                 "consecutive_failures": 0,
                 "consecutive_suspect": 0,
                 "consecutive_blocks": 0,
+                "last_cards_count": 0,
+                "last_quality": "",
+                "last_fallback_used": False,
+                "last_missing_title_pct": 0,
+                "last_missing_price_pct": 0,
+                "last_missing_location_pct": 0,
+                "last_missing_agency_pct": 0,
             }
-    payload = {"version": 2, "last_channel": "chromium", "sites": sites}
+    payload = {"version": 4, "last_channel": "chromium", "sites": sites}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -297,6 +312,8 @@ class AffittoGuiApp:
         self.extract_price_var = tk.BooleanVar(value=self.config.extraction.extract_price)
         self.extract_zone_var = tk.BooleanVar(value=self.config.extraction.extract_zone)
         self.extract_agency_var = tk.BooleanVar(value=self.config.extraction.extract_agency)
+        self.private_only_ads_var = tk.BooleanVar(value=self.config.extraction.private_only_ads)
+        self.private_only_note_var = tk.StringVar(value="")
         self.blocked_name_var = tk.StringVar(value="")
         self.log_filter_var = tk.StringVar(value=self.gui_state.get("log_filter", "INFO"))
         self.status_var = tk.StringVar(value="Pronto.")
@@ -304,7 +321,9 @@ class AffittoGuiApp:
         self._blocked_names: list[str] = list(self.gui_state.get("blocked_agency_names", []))
 
         self._build_ui()
+        self.private_only_ads_var.trace_add("write", self._on_private_only_changed)
         self._bind_email_form_traces()
+        self._refresh_private_only_controls()
         self._load_blocked_names()
         self._load_email_form()
         self._refresh_email_status()
@@ -591,7 +610,18 @@ class AffittoGuiApp:
         fields.grid(row=3, column=1, sticky="w", padx=8, pady=6)
         ttk.Checkbutton(fields, text="Prezzo", variable=self.extract_price_var).pack(side=tk.LEFT)
         ttk.Checkbutton(fields, text="Zona", variable=self.extract_zone_var).pack(side=tk.LEFT, padx=(10, 0))
-        ttk.Checkbutton(fields, text="Agenzia", variable=self.extract_agency_var).pack(side=tk.LEFT, padx=(10, 0))
+        self.extract_agency_check = ttk.Checkbutton(fields, text="Agenzia", variable=self.extract_agency_var)
+        self.extract_agency_check.pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Checkbutton(frame, text="Modalita annunci privati", variable=self.private_only_ads_var).grid(
+            row=4, column=1, sticky="w", padx=8, pady=(0, 2)
+        )
+        ttk.Label(
+            frame,
+            textvariable=self.private_only_note_var,
+            foreground="#7a3e00",
+            wraplength=780,
+            justify=tk.LEFT,
+        ).grid(row=5, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4))
         ttk.Label(
             frame,
             text=(
@@ -601,7 +631,7 @@ class AffittoGuiApp:
             foreground="#2f4f4f",
             wraplength=780,
             justify=tk.LEFT,
-        ).grid(row=4, column=0, columnspan=2, sticky="w", padx=8, pady=(2, 8))
+        ).grid(row=6, column=0, columnspan=2, sticky="w", padx=8, pady=(2, 8))
         return frame
 
     def _build_blacklist_frame(self, parent: ttk.Frame) -> ttk.LabelFrame:
@@ -691,6 +721,9 @@ class AffittoGuiApp:
             "Run Once\n"
             "- Fa un solo ciclo completo di fetch, deduplica e notifiche.\n"
             "- Serve per verificare il setup prima del ciclo automatico.\n\n"
+            "First run / warmup\n"
+            "- Su runtime o VM nuovi il primo contatto con Idealista puo entrare in warmup.\n"
+            "- Se il primo Run Once segnala suspect o blocked, ripeti una volta e controlla i log prima di usare Reset Site Guard.\n\n"
             "Ciclo automatico\n"
             "- Attivalo solo dopo test OK e un Run Once pulito.\n"
             "- Usa intervalli realistici: minimo 5 minuti, meglio 10-15 se stai ancora tarando il setup.\n\n"
@@ -1008,6 +1041,25 @@ class AffittoGuiApp:
         self.notify_mode_note_var.set("Canali attivi: Telegram + Email.")
         self.telegram_section_note_var.set("")
 
+    def _on_private_only_changed(self, *_args) -> None:
+        self._refresh_private_only_controls()
+
+    def _refresh_private_only_controls(self) -> None:
+        private_only = bool(self.private_only_ads_var.get())
+        if private_only:
+            if not self.extract_agency_var.get():
+                self.extract_agency_var.set(True)
+            self._set_widget_enabled(self.extract_agency_check, False)
+            self.private_only_note_var.set(
+                "Con modalita attiva il progetto esclude localmente gli annunci con agenzia rilevata. "
+                "Se il parser non rileva l'agenzia, l'annuncio resta ammesso e viene contato come segnale incerto."
+            )
+            return
+        self._set_widget_enabled(self.extract_agency_check, True)
+        self.private_only_note_var.set(
+            "Con modalita disattiva il progetto usa solo il filtro URL del sito e l'eventuale blacklist agenzie locale."
+        )
+
     def _on_email_provider_changed(self) -> None:
         if self._selected_email_provider_id() == "custom":
             self._ensure_custom_transport_defaults()
@@ -1221,6 +1273,9 @@ class AffittoGuiApp:
             data["storage"]["retention_days"] = int(self.retention_days_var.get())
             data["extraction"]["extract_price"] = bool(self.extract_price_var.get())
             data["extraction"]["extract_zone"] = bool(self.extract_zone_var.get())
+            data["extraction"]["private_only_ads"] = bool(self.private_only_ads_var.get())
+            if self.private_only_ads_var.get():
+                self.extract_agency_var.set(True)
             data["extraction"]["extract_agency"] = bool(self.extract_agency_var.get())
 
             mode = self.notify_mode_var.get().strip().lower()
@@ -1259,6 +1314,9 @@ class AffittoGuiApp:
                 upsert_profile(self.profiles_path, profile)
             save_config(validated, self.config_path)
             self.config = validated
+            self.extract_agency_var.set(self.config.extraction.extract_agency)
+            self.private_only_ads_var.set(self.config.extraction.private_only_ads)
+            self._refresh_private_only_controls()
 
             db_path = _resolve_db_from_config(self.config_path, self.config.storage.db_path)
             db = Database(db_path)
@@ -1518,8 +1576,8 @@ class AffittoGuiApp:
             if not urls:
                 raise ConfigError("Inserisci almeno un URL prima di resettare il guard state.")
             _reset_guard_state(self.guard_state_path, urls)
-            self.status_var.set("Site guard resettato.")
-            self._enqueue("log", f"[INFO] Site guard reset: {self.guard_state_path}")
+            self.status_var.set("Site guard resettato (emergenza).")
+            self._enqueue("log", f"[INFO] Site guard reset manuale: {self.guard_state_path}")
         except Exception as exc:
             messagebox.showerror("Reset guard", str(exc))
 

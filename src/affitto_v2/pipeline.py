@@ -24,6 +24,8 @@ class PipelineRunResult:
     inserted_new: int = 0
     skipped_duplicate: int = 0
     skipped_blocked_agency: int = 0
+    skipped_private_only: int = 0
+    private_only_allowed_unknown: int = 0
     notified_email: int = 0
     email_items_batched: int = 0
     notified_telegram: int = 0
@@ -108,11 +110,16 @@ def process_listings(
     telegram_on, email_on = _channel_flags(config, options.notify_mode)
     email_queue: list[tuple[ListingRecord, str]] = []
     logger.info(
-        "Pipeline stage start. listings=%s notify_mode=%s send_real_notifications=%s",
+        "Pipeline stage start. listings=%s notify_mode=%s send_real_notifications=%s private_only=%s",
         len(listings),
         options.notify_mode,
         options.send_real_notifications,
+        config.extraction.private_only_ads,
     )
+    if config.extraction.private_only_ads:
+        logger.info(
+            "Private-only filter active. exclude_detected_agency=True keep_unknown_agency=True"
+        )
 
     if options.send_real_notifications and email_on and email_notifier is None:
         result.email_degraded = True
@@ -131,6 +138,17 @@ def process_listings(
 
     for item in listings:
         result.processed += 1
+        if config.extraction.private_only_ads:
+            if item.agency.strip():
+                result.skipped_private_only += 1
+                logger.info(
+                    "Skip agency listing due to private-only mode. site=%s ad_id=%s agency=%s",
+                    item.site,
+                    item.ad_id,
+                    item.agency,
+                )
+                continue
+            result.private_only_allowed_unknown += 1
         blocked, pattern = db.agency_is_blocked(item.agency)
         if blocked:
             result.skipped_blocked_agency += 1
@@ -196,5 +214,17 @@ def process_listings(
                 for _, dedup_key in email_queue:
                     db.mark_notified(dedup_key, "email")
                 result.notified_email += 1
+
+    if config.extraction.private_only_ads:
+        logger.info(
+            "Private-only filter summary. excluded_agency=%s allowed_without_agency_signal=%s",
+            result.skipped_private_only,
+            result.private_only_allowed_unknown,
+        )
+        if result.private_only_allowed_unknown:
+            logger.warning(
+                "Private-only mode kept listings without agency signal. count=%s guarantee_private_only=False",
+                result.private_only_allowed_unknown,
+            )
 
     return result

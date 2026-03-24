@@ -332,12 +332,27 @@ def _reset_site_guard_state(path: Path, search_urls: list[str], logger) -> None:
                 "last_success_utc": "",
                 "last_recovery_utc": "",
                 "last_valid_channel": "",
+                "last_attempt_channel": "",
+                "last_block_family": "",
+                "last_block_code": "",
+                "warmup_active": True,
+                "warmup_started_utc": "",
+                "warmup_completed_utc": "",
+                "warmup_failures": 0,
+                "warmup_last_failures": 0,
                 "consecutive_successes": 0,
                 "consecutive_failures": 0,
                 "consecutive_suspect": 0,
                 "consecutive_blocks": 0,
+                "last_cards_count": 0,
+                "last_quality": "",
+                "last_fallback_used": False,
+                "last_missing_title_pct": 0,
+                "last_missing_price_pct": 0,
+                "last_missing_location_pct": 0,
+                "last_missing_agency_pct": 0,
             }
-    payload = {"version": 2, "last_channel": "chromium", "sites": sites}
+    payload = {"version": 4, "last_channel": "chromium", "sites": sites}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     logger.info("Site guard state reset. file=%s sites=%s", path, len(sites))
@@ -687,13 +702,15 @@ def _build_notifiers(
 
 def _log_pipeline_summary(result, send_real_notifications: bool, logger, prefix: str) -> None:
     logger.info(
-        "%s processed=%s new=%s dup=%s blocked=%s email_items=%s email_messages=%s email_failures=%s "
+        "%s processed=%s new=%s dup=%s blocked=%s private_only_skipped=%s private_only_unknown=%s email_items=%s email_messages=%s email_failures=%s "
         "telegram_sent=%s telegram_failures=%s dry_run=%s",
         prefix,
         result.processed,
         result.inserted_new,
         result.skipped_duplicate,
         result.skipped_blocked_agency,
+        result.skipped_private_only,
+        result.private_only_allowed_unknown,
         result.email_items_batched,
         result.notified_email,
         result.email_failures,
@@ -893,6 +910,7 @@ def run(argv: list[str] | None = None) -> int:
         log_level=_resolve_log_level(args.log_level),
         log_file=APP_LOG_FILE,
         publisher=publisher,
+        enable_file_logging=args.command != "gui",
     )
 
     config_path = resolve_config_path(args.config or None)

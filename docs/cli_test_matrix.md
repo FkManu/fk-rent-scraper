@@ -89,6 +89,13 @@ Output atteso:
 - `dist\affitto_gui\affitto_gui.exe`
 - `dist\affitto_gui\affitto_cli.exe`
 
+Prerequisiti browser consigliati per Windows/VM:
+- `Microsoft Edge` installato
+- `Google Chrome` installato
+- motivo:
+  - alcuni siti reagiscono in modo diverso al browser automatizzato
+  - `auto` puo riordinare i candidati per sito solo se i browser reali esistono davvero sulla macchina
+
 Smoke test bundle:
 1. imposta un runtime isolato con `AFFITTO_V2_RUNTIME_DIR`
 2. avvia `affitto_gui.exe`
@@ -295,6 +302,13 @@ python run.py fetch-live-once --headed --notify-mode both --send-real-notificati
 
 Nota canali:
 - auto-rotation preferisce `msedge`/`chrome`; `chromium` resta fallback.
+- con patch Observable Autohealing la priorita puo cambiare per sito:
+  - `idealista` tende a preferire `msedge`
+  - `immobiliare` tende a preferire `chrome`
+  - il guard ricorda ultimo canale valido e ultimo canale che ha prodotto block/interstitial
+- su PC/VM Windows conviene avere installati **sia Edge sia Chrome**:
+  - non come bypass
+  - ma per dare al sistema un fallback reale quando un sito reagisce peggio a un browser rispetto all'altro
 
 Nota outcome:
 - il fetch live distingue ora `healthy`, `suspect`, `degraded`, `blocked`, `cooling`
@@ -303,6 +317,8 @@ Nota outcome:
   - `empty_suspicious`
   - `challenge_visible`
   - `hard_block`
+  - `hard_block_http_status`
+  - `interstitial_datadome`
   - `timeout_network`
   - `parse_issue`
   - `fallback_dominant`
@@ -349,8 +365,13 @@ Nota:
 - se la pagina e un blocco statico non interattivo (non captcha risolvibile), `pause_and_notify` non attende il timeout completo.
 - su pagine normali con script anti-bot nascosti non viene piu attivato il captcha solver (ridotti falsi positivi).
 - in `skip_and_notify` + `--headed`, se viene rilevata challenge verifica dispositivo/captcha, viene fatta una breve auto-attesa prima di classificare `blocked`.
+- in `auto` + `round_robin` il sistema puo riordinare in modo diverso i browser per sito:
+  - `idealista` tende a partire da `msedge`
+  - `immobiliare` tende a partire da `chrome`
 - un `200` con contenuto sospetto/vuoto non viene piu trattato automaticamente come successo.
 - retry automatico: massimo uno, solo su outcome transienti/sospetti marcati come retryable.
+- la patch non introduce retry aggressivi cross-browser sullo stesso URL:
+  - il riordino vale come memoria/priorita per le run e i siti successivi
 - parse fail / drift non vengono scambiati automaticamente per hard block.
 - su fetch riuscite vengono ora loggate metriche minime di qualità:
   - cards
@@ -363,3 +384,27 @@ Invio reale notifiche:
 ```powershell
 python run.py fetch-live-once --notify-mode both --send-real-notifications
 ```
+
+## 6-bis) Matrix pratica Edge/Chrome su VM
+
+Caso osservato in VM:
+- `idealista` spesso migliore con `msedge`
+- `immobiliare` puo mostrare `interstitial_datadome` con `msedge` ma comportarsi meglio con `chrome`
+
+Passi suggeriti:
+1. installare Edge e Chrome sulla VM
+2. eseguire:
+
+```powershell
+python run.py fetch-live-once --headed --notify-mode none --browser-channel auto --channel-rotation-mode round_robin --max-per-site 5 --save-live-debug
+```
+
+3. verificare nei log:
+- `Site guard channel candidates. site=idealista ...`
+- `Site guard channel candidates. site=immobiliare ...`
+- `Fetch URL result. site=... channel=...`
+- eventuali `interstitial_datadome` o `hard_block_http_status`
+
+Esito atteso:
+- il supporto riesce a vedere quale canale e stato usato per sito
+- il guard state conserva ultimo canale valido e ultima famiglia di blocco rilevata

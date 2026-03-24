@@ -228,6 +228,11 @@ Guard state now keeps a few extra signals per site:
 - consecutive successes / failures / suspect / block streak
 - last success and last recovery timestamps
 - last valid channel used successfully
+- warmup state for first-run handling:
+  - `warmup_active`
+  - `warmup_started_utc`
+  - `warmup_completed_utc`
+  - `warmup_failures`
 - last extraction quality snapshot:
   - cards count
   - fallback used
@@ -270,6 +275,10 @@ Note:
 - if a non-interactive hard block page is detected (for example "accesso bloccato"), manual wait is skipped automatically even with `pause_and_notify`.
 - false positives on normal listing pages with hidden anti-bot scripts are filtered out; captcha flow now starts only with strong challenge signals.
 - a `200 OK` with suspicious empty/shell content is no longer treated as a real success.
+- clean runtime / first-site contact now starts in a `warmup` phase:
+  - no prior success for the site means the guard is still learning that context
+  - the first `suspect` / `blocked` outcome is treated more conservatively and less punitively than a stable site
+  - warmup ends after the first healthy site success
 - empty legitimate result pages stay `healthy`; suspicious empties can trigger one conservative retry and, if repeated, a short cooldown.
 - parse/schema failures are tracked as `degraded` and do not trigger hard anti-block cooldown on their own.
 - successful fetches are now split more clearly:
@@ -320,6 +329,10 @@ Included in base GUI:
 - `Runtime`:
   - cycle minutes, max listings per site (capped at 50), retention days
   - extraction fields toggles (price / zone / agency)
+  - optional `annunci privati` mode:
+    - excludes locally the listings where an agency is detected
+    - on `idealista`, re-checks the detail page for still-unknown listings and skips those labeled `Professionista`
+    - keeps and logs listings where the agency signal is still unknown
   - agency blacklist by name (auto-converted to regex), in forma piu compatta
 - `Log`:
   - live logs with level filter (`INFO` / `WARNING` / `ERROR`) + `Pulisci Log`
@@ -434,9 +447,12 @@ Troubleshooting rapido:
   - automatic cycle still respects cooldown.
   - channel rotation now prefers `msedge/chrome`, `chromium` fallback.
   - in headed + `skip_and_notify`, verification/captcha gets a short auto-wait before declaring blocked.
+  - transient `interstitial_datadome` pages now also get a short self-clear window before being classified as blocked.
 - Scraping quality:
   - Immobiliare scroll avoids raw mouse wheel on page (prevents accidental map zoom interactions).
   - Idealista selectors refined (title/agency/location extraction) with location fallback from title.
+  - Idealista agency detection also reads the logo `img[alt]` inside professional `/pro/` cards, reducing false "private" pass-through.
+  - In `private_only`, Idealista can also confirm `Privato` / `Professionista` from the detail page for listings still ambiguous at card level.
 - Email digest format:
   - no placeholder `-` lines for missing fields.
   - includes `Sito` line per item.

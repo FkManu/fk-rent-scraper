@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
@@ -84,11 +85,77 @@ class LiveStreamHandler(logging.Handler):
 _NULL_STREAM = open(os.devnull, "a", encoding="utf-8")
 
 
+def _is_windows_lock_error(exc: OSError) -> bool:
+    if isinstance(exc, PermissionError):
+        return True
+    return getattr(exc, "winerror", None) == 32
+
+
+class SafeRotatingFileHandler(RotatingFileHandler):
+    def __init__(
+        self,
+        *args,
+        rollover_retry_count: int = 2,
+        rollover_retry_delay_sec: float = 0.2,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self._rollover_retry_count = max(0, int(rollover_retry_count))
+        self._rollover_retry_delay_sec = max(0.0, float(rollover_retry_delay_sec))
+        self._last_rollover_warning_monotonic = 0.0
+
+    def doRollover(self) -> None:
+        last_exc: OSError | None = None
+        for attempt in range(self._rollover_retry_count + 1):
+            try:
+                super().doRollover()
+                return
+            except OSError as exc:
+                if not _is_windows_lock_error(exc):
+                    raise
+                last_exc = exc
+                if attempt < self._rollover_retry_count and self._rollover_retry_delay_sec > 0:
+                    time.sleep(self._rollover_retry_delay_sec * (attempt + 1))
+        self._recover_after_rollover_failure(last_exc)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            if self.shouldRollover(record):
+                try:
+                    self.doRollover()
+                except OSError as exc:
+                    self._recover_after_rollover_failure(exc)
+            logging.FileHandler.emit(self, record)
+        except Exception:
+            self.handleError(record)
+
+    def _recover_after_rollover_failure(self, exc: OSError | None) -> None:
+        if self.stream:
+            try:
+                self.stream.close()
+            except Exception:
+                pass
+            self.stream = None
+        self.stream = self._open()
+        now = time.monotonic()
+        if now - self._last_rollover_warning_monotonic >= 60:
+            self._last_rollover_warning_monotonic = now
+            try:
+                sys.stderr.write(
+                    "Affitto log rollover skipped because app.log is locked by another process. "
+                    f"Continuing on current file. detail={exc}\n"
+                )
+                sys.stderr.flush()
+            except Exception:
+                pass
+
+
 def setup_logging(
     logger_name: str,
     log_level: str,
     log_file: Path,
     publisher: LiveLogPublisher | None = None,
+    enable_file_logging: bool = True,
 ) -> logging.Logger:
     logger = logging.getLogger(logger_name)
     logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
@@ -102,16 +169,18 @@ def setup_logging(
     )
     logger.addHandler(text_stream)
 
-    log_file.parent.mkdir(parents=True, exist_ok=True)
-    file_handler = RotatingFileHandler(
-        filename=log_file,
-        maxBytes=2_000_000,
-        backupCount=5,
-        encoding="utf-8",
-    )
-    file_handler.setLevel(logger.level)
-    file_handler.setFormatter(JsonFormatter())
-    logger.addHandler(file_handler)
+    if enable_file_logging:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = SafeRotatingFileHandler(
+            filename=log_file,
+            maxBytes=2_000_000,
+            backupCount=5,
+            encoding="utf-8",
+            delay=True,
+        )
+        file_handler.setLevel(logger.level)
+        file_handler.setFormatter(JsonFormatter())
+        logger.addHandler(file_handler)
 
     if publisher is not None:
         live_handler = LiveStreamHandler(publisher, level=logger.level)

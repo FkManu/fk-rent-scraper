@@ -150,6 +150,15 @@ class ExtractionFields(BaseModel):
     extract_price: bool = True
     extract_zone: bool = True
     extract_agency: bool = True
+    private_only_ads: bool = False
+
+    @model_validator(mode="after")
+    def _apply_private_only_requirements(self) -> "ExtractionFields":
+        # Private-only filtering depends on agency detection; keep the config coherent
+        # even when it is edited manually outside the GUI.
+        if self.private_only_ads:
+            self.extract_agency = True
+        return self
 
 
 class TelegramConfig(BaseModel):
