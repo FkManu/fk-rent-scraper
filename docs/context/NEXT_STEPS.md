@@ -9,21 +9,39 @@ Per ricostruire il contesto operativo minimo leggere prima:
 3. `docs/context/codex/REVIEW_2_1_STABLE.md`
 
 ## Priorita ragionevoli da qui in avanti
-1. Validazione VM della patch **Precisione fetch / annunci privati** gia implementata:
-   - confermare che `idealista` non venga piu skippato troppo presto sui transient `interstitial_datadome` auto-risolti
-   - confermare che il secondo controllo dettaglio marchi come `Professionista` parte degli annunci ancora "buoni" a livello card
-   - verificare esplicitamente che casi come `35159080` e `35009314` vengano ora scartati
-   - misurare ancora `excluded_agency` e `allowed_without_agency_signal` con log reali, verificando un calo credibile di quest'ultimo su `idealista`
-   - controllare che il pacing piu lento del detail-check non faccia salire challenge / interstitial rispetto ai run precedenti
-2. Continuare il lavoro di qualita parser:
+1. Validazione VM lunga della patch attuale **site guard + browser routing + private_only**:
+   - confermare che `idealista` non ricada in lunghe sequenze di solo `cooldown_active` dopo un `interstitial_datadome`
+   - verificare la presenza dei log di probe controllata del cooldown, invece del reset manuale come via standard
+   - confermare che `idealista` usi `msedge` installato quando disponibile e che `immobiliare` resti su `chrome`
+   - osservare quando scatta il retry con browser alternativo e se salva davvero qualche ciclo bloccato
+2. Validazione VM della riduzione aperture dettaglio in `private_only`:
+   - confermare che gli annunci gia presenti nel DB non vengano piu riaperti per riclassificazione
+   - misurare il delta tra primo ciclo e cicli successivi nei log `Idealista private-only detail verification start`
+   - verificare che i professionali gia noti nel DB vengano riusati senza nuova visita dettaglio
+   - continuare a misurare `excluded_agency` e `allowed_without_agency_signal` per capire quanto resta ancora davvero `unknown`
+3. Idea da approfondire in seguito: modalita opzionale **browser reale via CDP**:
+   - non sostituire il path corrente `managed`; la modalita CDP deve restare opzionale
+   - target operativo: usare un browser Chromium reale gia aperto dall'utente, collegandosi a `http://127.0.0.1:9222`
+   - caso d'uso principale: bootstrap manuale challenge/login/2FA o recovery assistita quando `idealista` richiede una sessione umana gia calda
+   - prerequisiti da documentare chiaramente:
+     - browser avviato manualmente con `--remote-debugging-port=9222`
+     - profilo dedicato separato da quello personale
+     - nessuna chiusura automatica del browser fisico da parte dell'app
+  - first step consigliato, solo se la riapriremo davvero:
+     - patch CLI-only
+     - nessuna GUI iniziale
+     - nessuna rotazione canale automatica in modalita CDP
+     - nessun retry cross-browser automatico in modalita CDP
+     - strategia pagina prudente: preferire nuova tab dedicata rispetto al riuso aggressivo della tab utente
+4. Continuare il lavoro di qualita parser solo dove serve:
    - ridurre i casi `partial_success_degraded`
    - migliorare soprattutto la lettura dei segnali agenzia su `idealista`
    - se serve, aggiungere telemetria leggera sugli annunci `private_only_unknown` residui per capire cosa passa ancora senza segnale ne in card ne in dettaglio
-3. Chiusura operativa pre-push:
+5. Chiusura operativa pre-push:
    - verificare l'hardening Windows della log rotation su run piu lunghi / GUI + subprocess
    - fare pulizia del working tree per la repo GitHub privata
    - escludere stabilmente i `docs/tmp_logs*.md` locali e selezionare i file docs/context da pubblicare
-4. Solo dopo questi punti tornare su:
+6. Solo dopo questi punti tornare su:
    - hardening/testability piu ampio del core live
    - installazione/distribuzione Windows piu blindata
    - rifinitura UX mirata
@@ -51,12 +69,20 @@ Per il dettaglio completo vedere:
 Nuove patch si aprono da qui, con scope piccolo e verificabile.
 
 ## Nota operativa aggiornata
-- la review log di alcune ore su VM mostra:
-  - `immobiliare` stabile e `healthy` su `chrome`
-  - `idealista` senza `hard_block`, ma ancora spesso `degraded`
-- la review log+DOM del 2026-03-24 ha aggiunto due fix mirati su `idealista`:
-  - attesa anche sul ramo `interstitial_datadome` in headed mode
-  - rilevamento agenzia dal logo `img[alt]` dentro `a[href*="/pro/"]`
-- i log piu recenti mostrano `idealista` di nuovo `healthy`, ma ancora con circa 13 annunci per pagina senza segnale agenzia
-- per questo la patch ora include un secondo controllo dettaglio, limitato e prudente, che legge `Privato` / `Professionista` dalla pagina annuncio
-- la priorita quindi non e piu "sbloccare i browser", ma aumentare la precisione utile del fetch e chiudere la validazione pre-push
+- la review VM del 2026-03-25 ha mostrato che gli intoppi prioritari non erano chiusi:
+  - GUI bundle non avviabile per packaging Tk incompleto
+  - `idealista` poteva ricadere in un cooldown del site guard percepito come "loop di protezione"
+  - il fallback da `msedge` a `chrome` su bundle peggiorava la probabilita di `interstitial_datadome`
+- questi punti sono stati corretti nel workspace:
+  - packaging GUI con runtime Tcl/Tk incluso
+  - cooldown interstitial con probe controllata e clear challenge piu severo
+  - uso dei browser reali installati e retry mirato con browser alternativo sui blocked outcome
+  - riuso del DB per tagliare le visite dettaglio `private_only`
+- la priorita quindi resta una sola:
+  - validare in VM che il nuovo equilibrio regga per qualche ora senza reset manuali frequenti e con meno aperture dettaglio superflue
+- valutazione strategica aggiuntiva del 2026-03-25:
+  - una modalita `connect_over_cdp` puo avere senso come strumento specialistico di recovery/stabilizzazione
+  - non va resa default:
+    - richiede browser gia aperto e preparato manualmente
+    - Playwright la documenta come connessione a fedelta inferiore rispetto al protocollo Playwright pieno
+    - complica lifecycle, cleanup e supporto se usata come percorso standard

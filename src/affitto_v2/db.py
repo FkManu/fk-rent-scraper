@@ -210,6 +210,30 @@ class Database:
             ).fetchall()
             return [str(r["pattern"]) for r in rows]
 
+    def get_listing_agencies_by_ad_ids(self, *, site: str, search_url: str, ad_ids: list[str]) -> dict[str, str]:
+        cleaned_ids = sorted({str(ad_id).strip() for ad_id in ad_ids if str(ad_id).strip()})
+        if not cleaned_ids:
+            return {}
+        placeholders = ",".join("?" for _ in cleaned_ids)
+        params: list[Any] = [site.strip().lower(), build_search_hash(search_url), *cleaned_ids]
+        query = f"""
+            SELECT ad_id, agency, last_seen_ts
+            FROM listings
+            WHERE site = ?
+              AND search_hash = ?
+              AND ad_id IN ({placeholders})
+            ORDER BY last_seen_ts DESC, id DESC
+        """
+        out: dict[str, str] = {}
+        with self._connect() as con:
+            rows = con.execute(query, params).fetchall()
+            for row in rows:
+                ad_id = str(row["ad_id"] or "").strip()
+                if not ad_id or ad_id in out:
+                    continue
+                out[ad_id] = str(row["agency"] or "").strip()
+        return out
+
     def agency_is_blocked(self, agency_name: str) -> tuple[bool, str]:
         value = agency_name or ""
         if not value.strip():

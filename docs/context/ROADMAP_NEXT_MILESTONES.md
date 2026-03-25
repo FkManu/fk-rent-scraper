@@ -41,6 +41,43 @@ Il focus immediato non e aprire nuova architettura, ma:
 - misurare meglio la precisione fetch reale
 - chiudere il giro pre-push verso la repo GitHub privata
 
+## Nota stato 2026-03-25
+I test VM piu lunghi hanno fatto emergere tre intoppi prioritari che hanno interrotto la roadmap lineare:
+- bundle GUI Windows non avviabile per packaging Tk incompleto
+- cooldown del site guard troppo opaco dopo `interstitial_datadome`, percepito come loop di protezione
+- volume ancora eccessivo di aperture dettaglio in `private_only` su annunci gia noti
+
+Questi fix sono ora entrati nella baseline locale:
+- riparazione packaging GUI con runtime Tcl/Tk incluso
+- probe controllata durante il cooldown interstitial e reset state piu completo
+- uso dei browser reali installati con retry mirato su browser alternativo
+- riuso del DB per evitare detail-check inutili in `private_only`
+
+Di conseguenza:
+- Milestone A e B sono avanzate, ma non ancora chiuse sul piano operativo
+- la soglia di uscita attuale non e una nuova feature, ma una validazione VM lunga senza reset frequenti
+- ogni lavoro successivo deve continuare a ridurre interazioni sospette e recovery manuali
+
+## Idea da approfondire 2026-03-25 - Browser reale via CDP
+E emersa una direzione potenzialmente utile ma da trattare con disciplina: una modalita opzionale che si colleghi a un browser reale gia aperto tramite CDP (`connect_over_cdp`), invece di lanciare sempre un browser Playwright gestito.
+
+L'idea e sensata soprattutto per:
+- bootstrap manuale di challenge/verifica dispositivo/login/2FA
+- sessioni gia calde e umane su `idealista`
+- recovery assistita quando il problema e il launch/profile piu che il parser
+
+Ma non deve diventare default perche:
+- richiede preparazione manuale del browser
+- aumenta la dipendenza dallo stato del browser dell'utente
+- riduce la fedelta/controllabilita rispetto al protocollo Playwright pieno
+- complica cleanup, retry e supporto
+
+La posizione di progetto quindi e:
+- `managed` resta il browser mode standard
+- `cdp` resta per ora solo un'idea da approfondire, non una patch attiva
+- GUI non necessaria nella prima iterazione
+- nessun marketing interno di questa modalita come bypass definitivo anti-bot
+
 ### Lettura manageriale
 La base non e improvvisata.
 Il punto delicato non e la presenza del prodotto ma la **maturita del motore live**.
@@ -89,7 +126,7 @@ Ogni patch deve essere:
 
 ---
 
-# Milestone A — First-Run Reliability
+# Milestone A - First-Run Reliability
 
 ## Obiettivo
 Rendere il primo utilizzo su PC/VM/runtime vergini piu lineare e meno fragile, soprattutto sul caso Idealista.
@@ -103,6 +140,7 @@ Se il prodotto richiede conoscenza tacita o reset manuali come procedura standar
 - dipendenza pratica da `Reset Site Guard` al primo avvio
 - initial state del guard troppo poco esplicito
 - log first-run non ancora abbastanza leggibili
+- bundle GUI realmente avviabile senza appoggiarsi all'ambiente Python locale
 
 ## Risultato atteso
 Su runtime nuovo il prodotto deve:
@@ -116,6 +154,7 @@ Su runtime nuovo il prodotto deve:
 - log first-run piu parlanti
 - feedback GUI piu chiaro sullo stato iniziale
 - verifica su VM/PC pulito
+- bundle GUI realmente avviabile su Windows senza dipendenze Python esterne
 
 ## Criteri di uscita
 - primo run su VM pulita spiegabile e ripetibile
@@ -124,7 +163,7 @@ Su runtime nuovo il prodotto deve:
 
 ---
 
-# Milestone B — Observable Autohealing
+# Milestone B - Observable Autohealing
 
 ## Obiettivo
 Portare il sistema da anti-block reattivo a resilienza piu osservabile e adattiva.
@@ -160,9 +199,11 @@ Il sistema deve riuscire a mostrare almeno in forma sintetica:
 - tassonomia outcome piu chiara
 - stato sintetico per sito nel runtime o GUI
 - policy piu leggibili per suspect / blocked / degraded
-- affinità browser per sito piu osservabile e adattiva
+- affinita browser per sito piu osservabile e adattiva
 - artifact diagnostici piu mirati
 - distinzione pratica piu chiara tra `Run Once` e `Ciclo automatico`
+- gestione meno cieca del cooldown dopo interstitial, con possibilita di probe controllata
+- eventuale modalita opzionale di recovery assistita tramite browser reale via CDP, se e solo se resta separata dal path standard
 
 ## Criteri di uscita
 - un problema live si capisce piu velocemente senza dover leggere tutto `app.log`
@@ -171,7 +212,7 @@ Il sistema deve riuscire a mostrare almeno in forma sintetica:
 
 ---
 
-# Milestone C — Core Hardening & Testability
+# Milestone C - Core Hardening & Testability
 
 ## Obiettivo
 Industrializzare il motore live per ridurre il rischio di patch stratificate e regressioni difficili da controllare.
@@ -209,7 +250,7 @@ Una codebase in cui i cambiamenti al motore live siano:
 
 ---
 
-# Milestone D — Vendible Ops Base
+# Milestone D - Vendible Ops Base
 
 ## Obiettivo
 Preparare la base operativa che rendera possibile la futura proposta commerciale, senza ancora spostare il focus sul marketing.
@@ -240,10 +281,10 @@ Si costruisce il minimo necessario per poter dire in futuro:
 ---
 
 # Ordine di esecuzione raccomandato
-1. **Milestone A — First-Run Reliability**
-2. **Milestone B — Observable Autohealing**
-3. **Milestone C — Core Hardening & Testability**
-4. **Milestone D — Vendible Ops Base**
+1. **Milestone A - First-Run Reliability**
+2. **Milestone B - Observable Autohealing**
+3. **Milestone C - Core Hardening & Testability**
+4. **Milestone D - Vendible Ops Base**
 
 ## Nota
 L'ordine non e casuale.
@@ -257,6 +298,8 @@ La futura vendibilita dipende prima dalla riduzione dell'attrito reale e dall'af
 - non gonfiare la GUI con troppi controlli avanzati prima di avere stati migliori
 - non stratificare altra logica critica in `live_fetch.py` senza criterio
 - non vendere narrativamente il progetto prima di aver reso piu leggibile il suo comportamento operativo
+- non aumentare le aperture dettaglio `private_only` se prima non si dimostra che il DB puo assorbire i casi gia noti
+- non trasformare il CDP in nuovo default senza prima dimostrare che il costo di supporto e lifecycle resta sotto controllo
 
 ---
 

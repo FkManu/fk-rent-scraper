@@ -351,8 +351,10 @@ def _reset_site_guard_state(path: Path, search_urls: list[str], logger) -> None:
                 "last_missing_price_pct": 0,
                 "last_missing_location_pct": 0,
                 "last_missing_agency_pct": 0,
+                "probe_after_utc": "",
+                "probe_attempts": 0,
             }
-    payload = {"version": 4, "last_channel": "chromium", "sites": sites}
+    payload = {"version": 5, "last_channel": "chromium", "sites": sites}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     logger.info("Site guard state reset. file=%s sites=%s", path, len(sites))
@@ -856,6 +858,7 @@ def _run_fetch_live_once(config_path: Path, profiles_path: Path, args: argparse.
                 guard_max_cooldown_sec=guard_max_cooldown_min * 60,
                 channel_rotation_mode=channel_rotation_mode,
                 guard_ignore_cooldown=guard_ignore_cooldown,
+                listing_cache_db_path=str(db_path),
                 logger=logger,
             )
         )

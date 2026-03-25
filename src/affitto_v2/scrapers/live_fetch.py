@@ -5,6 +5,7 @@ import json
 import os
 import random
 import re
+import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -13,7 +14,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 from playwright.async_api import TimeoutError as PlaywrightTimeout
 from playwright.async_api import async_playwright
 
-from ..db import ListingRecord
+from ..db import Database, ListingRecord
 from ..models import CaptchaMode, ExtractionFields
 
 _CAPTCHA_URL_KEYS = (
@@ -113,7 +114,7 @@ _SITE_DEFAULT_CHANNELS: dict[str, tuple[str, ...]] = {
     "idealista": ("msedge", "chrome", "chromium"),
     "immobiliare": ("chrome", "msedge", "chromium"),
 }
-_GUARD_STATE_VERSION = 4
+_GUARD_STATE_VERSION = 5
 
 
 @dataclass(slots=True)
@@ -294,6 +295,8 @@ def _new_guard_site_entry() -> dict[str, object]:
         "last_missing_price_pct": 0,
         "last_missing_location_pct": 0,
         "last_missing_agency_pct": 0,
+        "probe_after_utc": "",
+        "probe_attempts": 0,
     }
 
 
@@ -374,6 +377,22 @@ def _cooldown_remaining_sec(state: dict, site: str, now: datetime) -> int:
         return 0
     delta = int((until - now).total_seconds())
     return delta if delta > 0 else 0
+
+
+def _interstitial_probe_delay_sec(*, base_sec: int, cooldown_sec: int) -> int:
+    if cooldown_sec <= 0:
+        return 0
+    baseline = max(600, min(1200, max(1, base_sec // 2)))
+    return min(cooldown_sec, baseline)
+
+
+def _is_interstitial_probe_due(entry: dict, now: datetime) -> bool:
+    if str(entry.get("last_block_family") or "").strip().lower() != "interstitial":
+        return False
+    due_at = _parse_utc_iso(str(entry.get("probe_after_utc") or ""))
+    if due_at is None:
+        return False
+    return due_at <= now
 
 
 def _count_hits(haystack: str, keys: tuple[str, ...]) -> int:
@@ -749,6 +768,8 @@ def _apply_guard_outcome(
         entry["last_valid_channel"] = channel_label
         entry["last_block_family"] = ""
         entry["last_block_code"] = ""
+        entry["probe_after_utc"] = ""
+        entry["probe_attempts"] = 0
         warmup_failures = int(entry.get("warmup_failures") or 0)
         if was_warmup:
             entry["warmup_last_failures"] = warmup_failures
@@ -803,6 +824,13 @@ def _apply_guard_outcome(
             action = "apply_cooldown_block"
         entry["strikes"] = strikes
         entry["cooldown_until_utc"] = (now + timedelta(seconds=cooldown)).isoformat()
+        if blocked_family == "interstitial":
+            probe_delay = _interstitial_probe_delay_sec(base_sec=base_sec, cooldown_sec=cooldown)
+            entry["probe_after_utc"] = (now + timedelta(seconds=probe_delay)).isoformat() if probe_delay > 0 else ""
+            entry["probe_attempts"] = 0
+        else:
+            entry["probe_after_utc"] = ""
+            entry["probe_attempts"] = 0
         return GuardDecision(
             action=action,
             cooldown_sec=cooldown,
@@ -1024,6 +1052,30 @@ def _filter_available_channel_candidates(candidates: list[str | None]) -> tuple[
     return (filtered_candidates or candidates), skipped_labels
 
 
+def _alternate_browser_retry_candidates(
+    channel_candidates: list[str | None],
+    *,
+    current_label: str,
+) -> list[str | None]:
+    labels: list[str] = []
+    for candidate in channel_candidates:
+        label = _channel_to_label(candidate)
+        if label == current_label:
+            continue
+        if label in _CHANNEL_LABELS and label not in labels:
+            labels.append(label)
+    return [_label_to_channel(label) for label in labels]
+
+
+def _resolve_channel_executable_path(label: str) -> Path | None:
+    if label not in {"chrome", "msedge"}:
+        return None
+    for candidate in _channel_install_candidates(label):
+        if candidate.exists():
+            return candidate
+    return None
+
+
 async def _launch_browser_session(
     *,
     pw,
@@ -1034,16 +1086,21 @@ async def _launch_browser_session(
     guard_state: dict | None,
     headless: bool,
     logger,
+    candidate_override: list[str | None] | None = None,
 ) -> tuple[object | None, object, object, str]:
     launch_error: Exception | None = None
     browser = None
     context = None
     page = None
-    channel_candidates = _rotated_channel_candidates(
-        requested_channel=requested_channel,
-        rotation_mode=rotation_mode,
-        state=guard_state,
-        site=site,
+    channel_candidates = (
+        list(candidate_override)
+        if candidate_override is not None
+        else _rotated_channel_candidates(
+            requested_channel=requested_channel,
+            rotation_mode=rotation_mode,
+            state=guard_state,
+            site=site,
+        )
     )
     if requested_channel is None and rotation_mode == "round_robin":
         channel_candidates, skipped_labels = _filter_available_channel_candidates(channel_candidates)
@@ -1060,6 +1117,7 @@ async def _launch_browser_session(
         )
     for candidate in channel_candidates:
         channel_label = _channel_to_label(candidate)
+        executable_path = _resolve_channel_executable_path(channel_label)
         try:
             if profile_dir:
                 p_base = Path(profile_dir).expanduser()
@@ -1074,21 +1132,26 @@ async def _launch_browser_session(
                     "extra_http_headers": {"Accept-Language": "it-IT,it;q=0.9,en;q=0.8"},
                     "viewport": {"width": 1366, "height": 900},
                 }
-                if candidate is not None:
+                if executable_path is not None:
+                    launch_persistent_kwargs["executable_path"] = str(executable_path)
+                elif candidate is not None:
                     launch_persistent_kwargs["channel"] = candidate
                 context = await pw.chromium.launch_persistent_context(**launch_persistent_kwargs)
                 logger.info(
-                    "Using persistent browser profile. site=%s profile=%s channel=%s",
+                    "Using persistent browser profile. site=%s profile=%s channel=%s launcher=%s",
                     site,
                     p,
                     channel_label,
+                    "installed" if executable_path is not None else "playwright_channel",
                 )
             else:
                 launch_kwargs = {
                     "headless": headless,
                     "args": ["--disable-blink-features=AutomationControlled"],
                 }
-                if candidate is not None:
+                if executable_path is not None:
+                    launch_kwargs["executable_path"] = str(executable_path)
+                elif candidate is not None:
                     launch_kwargs["channel"] = candidate
                 browser = await pw.chromium.launch(**launch_kwargs)
                 context = await browser.new_context(
@@ -1097,7 +1160,12 @@ async def _launch_browser_session(
                     extra_http_headers={"Accept-Language": "it-IT,it;q=0.9,en;q=0.8"},
                     viewport={"width": 1366, "height": 900},
                 )
-                logger.info("Using ephemeral browser context. site=%s channel=%s", site, channel_label)
+                logger.info(
+                    "Using ephemeral browser context. site=%s channel=%s launcher=%s",
+                    site,
+                    channel_label,
+                    "installed" if executable_path is not None else "playwright_channel",
+                )
             await context.add_init_script(
                 "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
             )
@@ -1150,6 +1218,8 @@ def _channel_install_candidates(label: str) -> list[Path]:
 
 def _is_channel_available(label: str) -> bool:
     if label == "chromium":
+        if getattr(sys, "frozen", False):
+            return False
         return True
     if os.name != "nt":
         return True
@@ -1475,6 +1545,13 @@ async def _wait_until_verification_cleared(page, *, site: str, timeout_sec: int,
         await asyncio.sleep(interval)
         elapsed += interval
         try:
+            body_l = ""
+            try:
+                body_l = _normalize(await page.locator("body").inner_text()).lower()
+            except Exception:
+                body_l = ""
+            if _is_datadome_interstitial(current_url=page.url, body_text=body_l):
+                continue
             if await _has_listing_signals(page, site):
                 logger.info("Verification challenge cleared after %s sec.", elapsed)
                 return True
@@ -1919,7 +1996,13 @@ async def _verify_idealista_private_only_candidates(
     nav_timeout_ms: int,
     logger,
 ) -> None:
-    candidates = [card for card in cards if not _normalize(card.get("agency")) and _normalize(card.get("url"))]
+    candidates = [
+        card
+        for card in cards
+        if not _normalize(card.get("agency"))
+        and _normalize(card.get("url"))
+        and not bool(card.get("_private_only_db_cached"))
+    ]
     if not candidates:
         return
 
@@ -2010,6 +2093,46 @@ async def _verify_idealista_private_only_candidates(
     )
 
 
+def _apply_idealista_private_only_db_cache(
+    *,
+    db: Database | None,
+    search_url: str,
+    cards: list[dict],
+    logger,
+) -> None:
+    if db is None or not cards:
+        return
+    candidate_ids = [str(card.get("ad_id") or "").strip() for card in cards if _normalize(card.get("url"))]
+    if not candidate_ids:
+        return
+    cached = db.get_listing_agencies_by_ad_ids(site="idealista", search_url=search_url, ad_ids=candidate_ids)
+    if not cached:
+        return
+
+    reused_total = 0
+    reused_professional = 0
+    reused_unknown = 0
+    for card in cards:
+        ad_id = str(card.get("ad_id") or "").strip()
+        if not ad_id or ad_id not in cached:
+            continue
+        reused_total += 1
+        card["_private_only_db_cached"] = True
+        cached_agency = cached.get(ad_id, "").strip()
+        if cached_agency and not _normalize(card.get("agency")):
+            card["agency"] = cached_agency
+            reused_professional += 1
+        elif not cached_agency:
+            reused_unknown += 1
+
+    logger.info(
+        "Idealista private-only DB cache reuse. matched=%s reused_professional=%s reused_unknown=%s",
+        reused_total,
+        reused_professional,
+        reused_unknown,
+    )
+
+
 async def _extract_for_url(
     page,
     search_url: str,
@@ -2021,6 +2144,7 @@ async def _extract_for_url(
     captcha_wait_sec: int,
     headless: bool,
     debug_dir: Path | None,
+    listing_cache_db: Database | None,
     logger,
 ) -> tuple[list[dict], FetchOutcome]:
     request_url = _sanitize_search_url(search_url)
@@ -2219,6 +2343,12 @@ async def _extract_for_url(
             )
             return [], outcome
     if site == "idealista" and extraction.private_only_ads and not used_fallback:
+        _apply_idealista_private_only_db_cache(
+            db=listing_cache_db,
+            search_url=search_url,
+            cards=cards,
+            logger=logger,
+        )
         await _verify_idealista_private_only_candidates(
             page=page,
             cards=cards,
@@ -2290,6 +2420,7 @@ async def fetch_live_once(
     guard_max_cooldown_sec: int,
     channel_rotation_mode: str,
     guard_ignore_cooldown: bool,
+    listing_cache_db_path: str | None = None,
     logger,
 ) -> list[ListingRecord]:
     if not search_urls:
@@ -2301,6 +2432,7 @@ async def fetch_live_once(
         raise ValueError("channel_rotation_mode must be one of: off|round_robin")
     guard_state_path = Path(site_guard_state_path).expanduser() if site_guard_state_path else None
     guard_state = _load_guard_state(guard_state_path) if (site_guard_enabled and guard_state_path is not None) else None
+    listing_cache_db = Database(Path(listing_cache_db_path).expanduser()) if listing_cache_db_path else None
     jitter_min = max(0, int(guard_jitter_min_sec))
     jitter_max = max(jitter_min, int(guard_jitter_max_sec))
     base_cooldown = max(60, int(guard_base_cooldown_sec))
@@ -2339,56 +2471,78 @@ async def fetch_live_once(
                             )
                         now = _utc_now()
                         rem = _cooldown_remaining_sec(guard_state, site, now)
-                        if rem > 0 and not guard_ignore_cooldown:
-                            logger.warning(
-                                "Site guard cooldown active. site=%s remaining_sec=%s skip_url=%s",
-                                site,
-                                rem,
-                                url,
-                            )
-                            logger.info(
-                                "Cooldown skip hint. site=%s use --guard-ignore-cooldown for one forced run or --guard-reset-state to clear guard state.",
-                                site,
-                            )
-                            cooldown_outcome = FetchOutcome(
-                                tier="cooling",
-                                code="cooldown_active",
-                                detail=f"remaining_sec={rem}",
-                            )
-                            decision = _apply_guard_outcome(
-                                state=guard_state,
-                                site=site,
-                                outcome=cooldown_outcome,
-                                now=now,
-                                base_sec=base_cooldown,
-                                max_sec=max_cooldown,
-                                channel_label=selected_channel_label or "chromium",
+                        probe_due = rem > 0 and _is_interstitial_probe_due(entry, now)
+                        if probe_due and not guard_ignore_cooldown:
+                            entry["probe_attempts"] = int(entry.get("probe_attempts") or 0) + 1
+                            probe_delay = _interstitial_probe_delay_sec(base_sec=base_cooldown, cooldown_sec=rem)
+                            entry["probe_after_utc"] = (
+                                (now + timedelta(seconds=probe_delay)).isoformat() if probe_delay > 0 else ""
                             )
                             _save_guard_state(guard_state_path, guard_state)
-                            outcomes_seen.append(cooldown_outcome)
-                            _log_guard_decision(
-                                logger=logger,
-                                site=site,
-                                url=url,
-                                outcome=cooldown_outcome,
-                                decision=decision,
-                                entry=_site_state(guard_state, site),
+                            logger.info(
+                                "Site guard cooldown probe due. site=%s remaining_sec=%s attempts=%s url=%s",
+                                site,
+                                rem,
+                                entry.get("probe_attempts"),
+                                url,
                             )
-                            if debug_path is not None and decision.transition:
-                                _save_guard_event_artifact(
-                                    debug_dir=debug_path,
-                                    site=site,
-                                    event=f"{cooldown_outcome.tier}_{cooldown_outcome.code}",
-                                    payload={
-                                        "site": site,
-                                        "url": url,
-                                        "outcome": asdict(cooldown_outcome),
-                                        "decision": asdict(decision),
-                                        "state": dict(_site_state(guard_state, site)),
-                                    },
-                                    logger=logger,
+                        if rem > 0 and not guard_ignore_cooldown:
+                            if probe_due:
+                                logger.info(
+                                    "Site guard bypassing cooldown for controlled interstitial probe. site=%s url=%s",
+                                    site,
+                                    url,
                                 )
-                            continue
+                            else:
+                                logger.warning(
+                                    "Site guard cooldown active. site=%s remaining_sec=%s skip_url=%s",
+                                    site,
+                                    rem,
+                                    url,
+                                )
+                                logger.info(
+                                    "Cooldown skip hint. site=%s use --guard-ignore-cooldown for one forced run or --guard-reset-state to clear guard state.",
+                                    site,
+                                )
+                                cooldown_outcome = FetchOutcome(
+                                    tier="cooling",
+                                    code="cooldown_active",
+                                    detail=f"remaining_sec={rem}",
+                                )
+                                decision = _apply_guard_outcome(
+                                    state=guard_state,
+                                    site=site,
+                                    outcome=cooldown_outcome,
+                                    now=now,
+                                    base_sec=base_cooldown,
+                                    max_sec=max_cooldown,
+                                    channel_label=selected_channel_label or "chromium",
+                                )
+                                _save_guard_state(guard_state_path, guard_state)
+                                outcomes_seen.append(cooldown_outcome)
+                                _log_guard_decision(
+                                    logger=logger,
+                                    site=site,
+                                    url=url,
+                                    outcome=cooldown_outcome,
+                                    decision=decision,
+                                    entry=_site_state(guard_state, site),
+                                )
+                                if debug_path is not None and decision.transition:
+                                    _save_guard_event_artifact(
+                                        debug_dir=debug_path,
+                                        site=site,
+                                        event=f"{cooldown_outcome.tier}_{cooldown_outcome.code}",
+                                        payload={
+                                            "site": site,
+                                            "url": url,
+                                            "outcome": asdict(cooldown_outcome),
+                                            "decision": asdict(decision),
+                                            "state": dict(_site_state(guard_state, site)),
+                                        },
+                                        logger=logger,
+                                    )
+                                continue
                         if rem > 0 and guard_ignore_cooldown:
                             logger.info(
                                 "Forced live run while cooldown is active. site=%s remaining_sec=%s url=%s",
@@ -2436,6 +2590,7 @@ async def fetch_live_once(
                             captcha_wait_sec=captcha_wait_sec,
                             headless=headless,
                             debug_dir=debug_path,
+                            listing_cache_db=listing_cache_db,
                             logger=logger,
                         )
                         if cards or not outcome.retryable or attempt == 2:
@@ -2451,6 +2606,75 @@ async def fetch_live_once(
                             url,
                         )
                         await asyncio.sleep(retry_sleep)
+                    alternate_candidates = _alternate_browser_retry_candidates(
+                        launch_candidates,
+                        current_label=selected_channel_label or "chromium",
+                    )
+                    should_retry_with_alternate = (
+                        not cards
+                        and outcome.tier == "blocked"
+                        and outcome.code in {"interstitial_datadome", "challenge_visible"}
+                        and channel is None
+                        and channel_rotation_mode == "round_robin"
+                        and bool(alternate_candidates)
+                    )
+                    if should_retry_with_alternate:
+                        logger.info(
+                            "Blocked live outcome. site=%s channel=%s code=%s retrying_with_alternate_browser=%s url=%s",
+                            site,
+                            selected_channel_label or "chromium",
+                            outcome.code,
+                            ",".join(_channel_to_label(candidate) for candidate in alternate_candidates),
+                            url,
+                        )
+                        await _close_browser_handles(context=context, browser=browser)
+                        browser = None
+                        context = None
+                        page = None
+                        try:
+                            browser, context, page, selected_channel_label = await _launch_browser_session(
+                                pw=pw,
+                                site=site,
+                                profile_dir=profile_dir,
+                                requested_channel=channel,
+                                rotation_mode=channel_rotation_mode,
+                                guard_state=guard_state,
+                                headless=headless,
+                                logger=logger,
+                                candidate_override=alternate_candidates,
+                            )
+                            if guard_state is not None and guard_state_path is not None:
+                                guard_state["last_channel"] = selected_channel_label
+                                _save_guard_state(guard_state_path, guard_state)
+                            cards, outcome = await _extract_for_url(
+                                page=page,
+                                search_url=url,
+                                extraction=extraction,
+                                max_per_site=max_per_site,
+                                wait_after_goto_ms=wait_after_goto_ms,
+                                nav_timeout_ms=nav_timeout_ms,
+                                captcha_mode=captcha_mode,
+                                captcha_wait_sec=captcha_wait_sec,
+                                headless=headless,
+                                debug_dir=debug_path,
+                                listing_cache_db=listing_cache_db,
+                                logger=logger,
+                            )
+                            logger.info(
+                                "Alternate browser retry result. site=%s channel=%s tier=%s code=%s listings=%s url=%s",
+                                site,
+                                selected_channel_label or "chromium",
+                                outcome.tier,
+                                outcome.code,
+                                len(cards) if cards else outcome.listings,
+                                url,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "Alternate browser retry failed to start. site=%s details=%s",
+                                site,
+                                str(exc).splitlines()[0] if str(exc) else repr(exc),
+                            )
                     logger.info(
                         "Fetch URL result. site=%s channel=%s tier=%s code=%s listings=%s url=%s",
                         site,

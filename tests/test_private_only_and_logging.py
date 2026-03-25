@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import logging
 import tempfile
 import unittest
@@ -256,6 +257,75 @@ class LiveFetchReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(wait_mock.await_args.kwargs["site"], "idealista")
         self.assertEqual(wait_mock.await_args.kwargs["timeout_sec"], 12)
 
+    async def test_interstitial_wait_does_not_clear_while_interstitial_url_remains(self) -> None:
+        page = _FakePage(
+            url="https://geo.captcha-delivery.com/interstitial/?token=1",
+            body_text="generic page body",
+        )
+        with mock.patch.object(live_fetch, "_has_listing_signals", mock.AsyncMock(return_value=False)), mock.patch.object(
+            live_fetch,
+            "_is_hard_block_page",
+            mock.AsyncMock(return_value=(False, "")),
+        ), mock.patch.object(
+            live_fetch,
+            "_is_likely_captcha",
+            mock.AsyncMock(return_value=False),
+        ), mock.patch("src.affitto_v2.scrapers.live_fetch.asyncio.sleep", mock.AsyncMock()):
+            cleared = await live_fetch._wait_until_verification_cleared(
+                page,
+                site="immobiliare",
+                timeout_sec=2,
+                logger=_build_logger("test.live_fetch.interstitial.not_cleared"),
+            )
+
+        self.assertFalse(cleared)
+
+    def test_interstitial_probe_becomes_due_only_after_scheduled_time(self) -> None:
+        now = datetime(2026, 3, 24, 22, 51, tzinfo=timezone.utc)
+        entry = live_fetch._new_guard_site_entry()
+        entry["last_block_family"] = "interstitial"
+        entry["probe_after_utc"] = (now + timedelta(minutes=10)).isoformat()
+
+        self.assertFalse(live_fetch._is_interstitial_probe_due(entry, now))
+        self.assertTrue(live_fetch._is_interstitial_probe_due(entry, now + timedelta(minutes=10)))
+
+    def test_idealista_private_only_db_cache_reuses_known_records(self) -> None:
+        cards = [
+            {"ad_id": "a1", "url": "https://www.idealista.it/immobile/a1/", "agency": ""},
+            {"ad_id": "a2", "url": "https://www.idealista.it/immobile/a2/", "agency": ""},
+            {"ad_id": "a3", "url": "https://www.idealista.it/immobile/a3/", "agency": "Agency on label"},
+        ]
+        db = mock.Mock()
+        db.get_listing_agencies_by_ad_ids.return_value = {"a1": "Professionista (detail check)", "a2": ""}
+
+        live_fetch._apply_idealista_private_only_db_cache(
+            db=db,
+            search_url="https://www.idealista.it/aree/test",
+            cards=cards,
+            logger=_build_logger("test.live_fetch.private_only.db_cache"),
+        )
+
+        self.assertEqual(cards[0]["agency"], "Professionista (detail check)")
+        self.assertTrue(cards[0]["_private_only_db_cached"])
+        self.assertEqual(cards[1]["agency"], "")
+        self.assertTrue(cards[1]["_private_only_db_cached"])
+        self.assertNotIn("_private_only_db_cached", cards[2])
+
+    def test_resolve_channel_executable_path_uses_installed_browser(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            edge_path = Path(tmpdir) / "msedge.exe"
+            edge_path.write_text("", encoding="utf-8")
+            with mock.patch.object(live_fetch, "_channel_install_candidates", return_value=[edge_path]):
+                resolved = live_fetch._resolve_channel_executable_path("msedge")
+
+        self.assertEqual(resolved, edge_path)
+
+    def test_alternate_browser_retry_candidates_skip_current_channel(self) -> None:
+        candidates = ["msedge", "chrome", None]
+        retry_candidates = live_fetch._alternate_browser_retry_candidates(candidates, current_label="chrome")
+
+        self.assertEqual(retry_candidates, ["msedge", None])
+
     def test_classify_idealista_publisher_kind(self) -> None:
         private_body = "Persona che pubblica l'annuncio Privato Daniele Contatta l'inserzionista"
         professional_body = (
@@ -321,6 +391,50 @@ class LiveFetchReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cards[0]["agency"], "")
         self.assertEqual(cards[1]["agency"], "Professionista (detail check)")
         self.assertEqual(page.visited, [cards[0]["url"], cards[1]["url"]])
+
+    async def test_detail_verification_skips_db_cached_cards(self) -> None:
+        cards = [
+            {
+                "site": "idealista",
+                "url": "https://www.idealista.it/immobile/1/",
+                "ad_id": "1",
+                "title": "Gia in cache",
+                "agency": "",
+                "_private_only_db_cached": True,
+            },
+            {
+                "site": "idealista",
+                "url": "https://www.idealista.it/immobile/2/",
+                "ad_id": "2",
+                "title": "Da verificare",
+                "agency": "",
+            },
+        ]
+        page = _FakeDetailPage(
+            {
+                "https://www.idealista.it/immobile/2/": {
+                    "body_text": "Persona che pubblica l'annuncio Privato Marta",
+                },
+            }
+        )
+
+        with mock.patch.object(live_fetch, "_accept_cookies_if_present", mock.AsyncMock()), mock.patch.object(
+            live_fetch,
+            "_dismiss_intrusive_popups",
+            mock.AsyncMock(),
+        ), mock.patch.object(
+            live_fetch,
+            "_is_likely_captcha",
+            mock.AsyncMock(return_value=False),
+        ):
+            await live_fetch._verify_idealista_private_only_candidates(
+                page=page,
+                cards=cards,
+                nav_timeout_ms=5000,
+                logger=_build_logger("test.live_fetch.detail_verify.skip_cached"),
+            )
+
+        self.assertEqual(page.visited, [cards[1]["url"]])
 
 
 if __name__ == "__main__":
