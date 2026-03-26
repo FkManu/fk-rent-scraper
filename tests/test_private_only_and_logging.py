@@ -784,6 +784,36 @@ class LiveFetchReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(attempted, 1)
         self.assertEqual(page.visited, [cards[1]["url"]])
 
+    async def test_detail_verification_returns_zero_when_no_candidates_remain(self) -> None:
+        cards = [
+            {
+                "site": "idealista",
+                "url": "https://www.idealista.it/immobile/1/",
+                "ad_id": "1",
+                "title": "Gia classificato",
+                "agency": "Professionista (detail check)",
+            },
+            {
+                "site": "idealista",
+                "url": "https://www.idealista.it/immobile/2/",
+                "ad_id": "2",
+                "title": "Gia in cache",
+                "agency": "",
+                "_private_only_db_cached": True,
+            },
+        ]
+        page = _FakeDetailPage({})
+
+        attempted = await live_fetch._verify_idealista_private_only_candidates(
+            page=page,
+            cards=cards,
+            nav_timeout_ms=5000,
+            logger=_build_logger("test.live_fetch.detail_verify.no_candidates"),
+        )
+
+        self.assertEqual(attempted, 0)
+        self.assertEqual(page.visited, [])
+
     async def test_detail_verification_persists_professional_memory(self) -> None:
         cards = [
             {

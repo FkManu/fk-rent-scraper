@@ -2624,7 +2624,7 @@ async def _verify_idealista_private_only_candidates(
         and not bool(card.get("_private_only_db_cached"))
     ]
     if not candidates:
-        return
+        return 0
 
     max_checks = min(len(candidates), _IDEALISTA_PRIVATE_ONLY_DETAIL_MAX_CHECKS)
     if detail_budget_remaining is not None:
@@ -2982,7 +2982,7 @@ async def _extract_for_url(
             cards=cards,
             logger=logger,
         )
-        attempt_stats.detail_touch_count = await _verify_idealista_private_only_candidates(
+        detail_touch_count = await _verify_idealista_private_only_candidates(
             page=page,
             cards=cards,
             nav_timeout_ms=nav_timeout_ms,
@@ -2991,6 +2991,7 @@ async def _extract_for_url(
             search_url=search_url,
             logger=logger,
         )
+        attempt_stats.detail_touch_count = max(0, int(detail_touch_count or 0))
     logger.info("Fetched site=%s url=%s listings=%s", site, search_url, len(cards))
     metrics = _build_extraction_metrics(
         site=site,
