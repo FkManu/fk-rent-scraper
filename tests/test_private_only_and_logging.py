@@ -814,6 +814,33 @@ class LiveFetchReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(attempted, 0)
         self.assertEqual(page.visited, [])
 
+    def test_coerce_detail_touch_count_keeps_int_without_warning(self) -> None:
+        logger = _build_logger("test.live_fetch.detail_touch_count.int")
+
+        with mock.patch.object(logger, "warning") as warning_mock:
+            detail_touch_count = live_fetch._coerce_detail_touch_count(
+                value=3,
+                site="idealista",
+                logger=logger,
+            )
+
+        self.assertEqual(detail_touch_count, 3)
+        warning_mock.assert_not_called()
+
+    def test_coerce_detail_touch_count_warns_and_coerces_none(self) -> None:
+        logger = _build_logger("test.live_fetch.detail_touch_count.none")
+
+        with mock.patch.object(logger, "warning") as warning_mock:
+            detail_touch_count = live_fetch._coerce_detail_touch_count(
+                value=None,
+                site="idealista",
+                logger=logger,
+            )
+
+        self.assertEqual(detail_touch_count, 0)
+        warning_mock.assert_called_once()
+        self.assertIn("Non-integer detail touch count returned", warning_mock.call_args.args[0])
+
     async def test_detail_verification_persists_professional_memory(self) -> None:
         cards = [
             {

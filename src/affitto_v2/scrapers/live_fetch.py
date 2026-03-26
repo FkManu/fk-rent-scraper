@@ -2606,6 +2606,29 @@ async def _extract_cards(
     return cards
 
 
+def _coerce_detail_touch_count(*, value: object, site: str, logger) -> int:
+    if type(value) is int:
+        return max(0, value)
+    try:
+        coerced = int(value or 0)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Non-integer detail touch count returned. site=%s value_type=%s value=%r coerced=0",
+            site,
+            type(value).__name__,
+            value,
+        )
+        return 0
+    logger.warning(
+        "Non-integer detail touch count returned. site=%s value_type=%s value=%r coerced=%s",
+        site,
+        type(value).__name__,
+        value,
+        max(0, coerced),
+    )
+    return max(0, coerced)
+
+
 async def _verify_idealista_private_only_candidates(
     *,
     page,
@@ -2991,7 +3014,11 @@ async def _extract_for_url(
             search_url=search_url,
             logger=logger,
         )
-        attempt_stats.detail_touch_count = max(0, int(detail_touch_count or 0))
+        attempt_stats.detail_touch_count = _coerce_detail_touch_count(
+            value=detail_touch_count,
+            site=site,
+            logger=logger,
+        )
     logger.info("Fetched site=%s url=%s listings=%s", site, search_url, len(cards))
     metrics = _build_extraction_metrics(
         site=site,
