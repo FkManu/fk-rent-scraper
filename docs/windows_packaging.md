@@ -45,7 +45,7 @@ Questo vale per:
 - `email_profiles.json`
 - DB SQLite
 - log
-- `playwright-profile`
+- `camoufox-profile`
 - `live_debug`
 - `site_guard_state.json`
 
@@ -67,6 +67,11 @@ Output atteso:
 
 - `dist\affitto_gui\affitto_gui.exe`
 - `dist\affitto_gui\affitto_cli.exe`
+- `dist\affitto_2_2_preview_bundle.zip`
+
+Nota preview:
+- la dist resta un artefatto locale di build e non va committata in repo
+- lo zip preview serve come consegna locale o upload esterno, non come contenuto Git
 
 I file PyInstaller usati sono:
 
@@ -96,6 +101,12 @@ $env:AFFITTO_V2_RUNTIME_DIR = "$env:TEMP\\affitto-bundle-runtime"
 .\dist\affitto_gui\affitto_cli.exe validate-config --config "$env:AFFITTO_V2_RUNTIME_DIR\\app_config.json"
 ```
 
+Per distribuire la build preview:
+
+```powershell
+Expand-Archive -Path .\dist\affitto_2_2_preview_bundle.zip -DestinationPath "$env:TEMP\\affitto-preview"
+```
+
 ## Stato verificato nella fase corrente
 
 Verificato realmente:
@@ -107,7 +118,7 @@ Verificato realmente:
 - `affitto_cli.exe test-email --dry-run` su copia del runtime corrente
 - `affitto_cli.exe fetch-live-once` con i flag principali del `Run Once` GUI:
   - start reale confermato
-  - uso browser `auto + round_robin` confermato
+  - uso backend `camoufox` confermato
   - stop one-shot pulito confermato in caso di challenge
 
 Verificato solo parzialmente:
@@ -127,7 +138,7 @@ Motivo del limite:
 
 - `Run Once` da bundle fallisce subito:
   - apri `app.log`
-  - controlla se il problema e` browser, challenge/captcha o cooldown guard
+  - controlla se il problema e` fetch Camoufox, challenge/captcha o cooldown guard
   - il comportamento atteso e` stop prudente con log chiaro, non retry aggressivo
 
 - `test-email --dry-run` fallisce:
@@ -140,7 +151,7 @@ Motivo del limite:
 - nessun installer Windows
 - nessuna icona/branding finale
 - companion `affitto_cli.exe` richiesto accanto alla GUI bundle
-- browser Playwright non vengono impacchettati come asset dedicati del bundle:
-  - per il percorso `Run Once` GUI il sistema usa `browser-channel auto` con `round_robin`, quindi prova prima `msedge` / `chrome`
-  - il companion CLI lanciato senza questi flag puo` ancora cercare Chromium Playwright locale
+- il browser Camoufox non viene impacchettato dentro la dist come binario dedicato:
+  - va reso disponibile con `python -m camoufox fetch` nel setup sorgente o nel provisioning della macchina
+  - la GUI bundle e il companion CLI usano `camoufox` come backend predefinito
 - smoke test GUI verificato bene su bootstrap/path/runtime; il click interattivo end-to-end del flusso utente dal bundle resta solo parzialmente verificato nel setup corrente

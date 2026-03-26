@@ -1,75 +1,98 @@
 # OUTPUT_CURRENT.md
 
 ## Patch corrente
-Stabilizzazione VM / site guard + private_only
+Bridge patch aggiornata:
+- completamento pivot backend `camoufox`
+- consolidamento GUI/CLI sul nuovo default
+- validazione VM del servizio continuo con soak reale
+- fix memoria negativa `private_only`
+- riallineamento docs della preview
 
 ## Stato
-Implementazione completata nel workspace, dist ricompilata e review aggiornata ai test VM del 2026-03-25.
+Pivot `camoufox` integrato nel ramo e soak VM del `2026-03-26` positivo.
+Il ramo va ora trattato come preview branch condivisibile, non piu come foundation soltanto interna.
 
-## Cosa e stato fatto
-- introdotta e mantenuta la modalita `private_only_ads` in config/runtime/GUI
-- confermata la coerenza con `extract_agency` quando la modalita e attiva
-- applicato filtro locale con skip degli annunci con `agency` valorizzata e conteggio separato dei `private_only_unknown`
-- hardening della log rotation Windows con `SafeRotatingFileHandler` e file handler disabilitato nel processo GUI
-- migliorata la gestione del ramo `interstitial_datadome`:
-  - clear della challenge non dichiarato piu troppo presto se URL/body restano interstitial
-  - cooldown interstitial con probe controllata invece di skip cieco fino al reset
-  - reset state GUI/runtime aggiornato per pulire anche i nuovi campi del guard
-- migliorata la strategia browser su Windows bundle:
-  - uso dell'eseguibile reale installato per `msedge` e `chrome` quando disponibile
-  - `chromium` non preferito piu in auto-mode su bundle frozen
-  - retry immediato con browser alternativo sui blocked outcome piu netti
-- ridotte le aperture dettaglio `private_only` su `idealista`:
-  - detail-check solo per annunci nuovi, senza etichetta agenzia e non gia presenti nel DB
-  - riuso della classificazione professionale gia nota nel DB
-  - annunci gia noti senza segnale agenzia trattati come `unknown` senza nuova apertura dettaglio
-- packaging GUI Windows corretto:
-  - inclusi `_tkinter`, `tcl86t.dll`, `tk86t.dll`, cartelle `tcl8.6` e `tk8.6`
-  - aggiunto runtime hook per `TCL_LIBRARY` e `TK_LIBRARY`
-- aggiornati i file di contesto operativo e aggiunta memoria sessione in `MultiAgent`
+## Implementazione eseguita
+- backend browser predefinito portato a `camoufox`
+- alias legacy `auto|firefox|chromium|chrome|msedge` mantenuti solo per compatibilita CLI e normalizzati a `camoufox`
+- launch Camoufox con profilo Windows umanizzato:
+  - `humanize=True`
+  - `locale=it-IT`
+  - `timezone=Europe/Rome`
+  - `screen=1920x1080`
+- root profili persistenti riallineata a `runtime/camoufox-profile`
+- GUI riallineata al nuovo default backend
+- setup Windows aggiornato per eseguire `python -m camoufox fetch`
+- spec di packaging aggiornate per includere dipendenze `camoufox`
+- servizio continuo confermato come percorso operativo reale del ramo
+- soak VM reale documentato in `docs/tmp_logs.md`
+- memoria negativa `private_only` introdotta nel DB per i professionali trovati dal detail-check
+- documentazione di contesto ripulita e riallineata al ruolo di preview
 
-## Evidence raccolta
-- dai log VM del 2026-03-25:
-  - `idealista` poteva entrare in cooldown ripetuto dopo `interstitial_datadome`, percepito come loop di protezione
-  - il reset manuale del site guard permetteva di ripartire su `msedge`
-  - `immobiliare` continuava invece a lavorare su `chrome`, confermando il disaccoppiamento per sito
-  - prima del fix browser, alcuni run di `idealista` cadevano da `msedge` a `chrome` e peggioravano in DataDome
-- dai test successivi dell'utente:
-  - dopo reset del site guard, `idealista` ha ripreso a ciclare correttamente su `msedge`
-  - `immobiliare` ha continuato a lavorare su `chrome` come atteso
-  - il filtro privati lato utente e stato giudicato buono, ma da rendere piu parsimonioso
-- dalla review log+DOM precedente:
-  - presenza reale della schermata "Verifica del dispositivo ..." con auto-risoluzione verso pagina completa dopo alcuni secondi
-  - molte card professionali con link `/pro/`
-  - nelle pagine dettaglio il publisher type e esposto in chiaro come `Privato` o `Professionista`
+## Stato operativo osservato in VM
+- finestra osservata: `2026-03-26 11:59:51` -> `2026-03-26 16:55:19`
+- comando usato: `affitto_cli.exe fetch-live-service ... --browser-channel camoufox ...`
+- cicli completati: `60`
+- outcome osservati:
+  - `healthy`: `240`
+  - `degraded`: `0`
+  - `blocked`: `0`
+  - `cooling`: `0`
+  - `assist_required`: `0`
+  - `ERROR`: `0`
+  - `Traceback`: `0`
+- servizio:
+  - sempre `stable`
+  - `runtime disposition=keep` in `56` cicli
+  - `recycle_site_slot` in `4` cicli
+  - nessun `recycle_runtime`
+  - nessun `stop_service`
+
+## Lettura tecnica utile
+- `idealista` tiene molto bene la sessione lunga su `camoufox`
+- `immobiliare` lavora bene ma ricicla periodicamente il solo slot locale per `slot_reuse_cap`
+- la distinction locale vs globale del runtime sta quindi funzionando:
+  - si preserva il runtime condiviso
+  - si ricrea solo lo slot del sito quando la policy prudente lo richiede
 
 ## File toccati
-- `src/affitto_v2/scrapers/live_fetch.py`
-- `src/affitto_v2/db.py`
-- `src/affitto_v2/main.py`
-- `src/affitto_v2/gui_app.py`
+- `README.md`
+- `requirements.txt`
+- `scripts/setup_test_env.ps1`
+- `packaging/affitto_cli.spec`
 - `packaging/affitto_gui.spec`
-- `packaging/runtime_hook_tk.py`
+- `src/affitto_v2/gui_app.py`
+- `src/affitto_v2/main.py`
+- `src/affitto_v2/scrapers/__init__.py`
+- `src/affitto_v2/scrapers/live_fetch.py`
 - `tests/test_private_only_and_logging.py`
-- `docs/context/HANDOFF.md`
-- `docs/context/NEXT_STEPS.md`
-- `docs/context/ROADMAP_NEXT_MILESTONES.md`
-- `docs/context/README.md`
-- `docs/context/codex/ACTIVE_PATCH.md`
-- `docs/context/codex/OUTPUT_CURRENT.md`
-- `docs/context/codex/REVIEW_CURRENT.md`
-- `docs/context/codex/HISTORY.md`
-
-## Verifiche eseguite
-- `python -m unittest discover -s 2.1_stable/tests -p test_private_only_and_logging.py -v` con `PYTHONPATH=2.1_stable` -> OK
-- smoke build:
-  - `affitto_gui.exe` resta vivo all'avvio
-  - `affitto_cli.exe --help` risponde
-- review dei log VM aggiornati in `docs/tmp_logs.md`
-- ispezione live precedente via browser su ricerca e dettagli `idealista`
+- `docs/cli_test_matrix.md`
+- `docs/windows_packaging.md`
 
 ## Limiti residui
-- il ramo `interstitial_datadome` resta prudente: se la verifica non si pulisce o la probe non recupera, il fetch viene comunque chiuso come bloccato
-- il secondo controllo dettaglio Idealista e limitato da cap e si interrompe se emerge una challenge, quindi non garantisce riclassificazione completa in tutti i run
-- l'impatto anti-bot del browser "gestito" non e eliminato: usare il browser installato aiuta, ma non rende Playwright indistinguibile da apertura manuale
-- serve nuova validazione VM/log reali prima del push GitHub finale
+- il problema aperto piu concreto oggi non e la tenuta del motore ma la precisione del filtro `private_only`
+- una prima correzione strutturale e gia stata chiusa:
+  - gli annunci professionali trovati dal detail-check Idealista vengono ora persistiti in una cache negativa dedicata
+  - questo dovrebbe ridurre il pattern osservato nei log in cui gli stessi `ad_id` professionali venivano riaperti a ogni ciclo
+- nei log VM resta costante il warning:
+  - `guarantee_private_only=False`
+  - `allowed_without_agency_signal` tra `15` e `16` per ciclo osservato
+- la policy di recycle preventivo dello slot `immobiliare` funziona, ma va ancora formalizzata meglio nei docs come scelta di ramo
+- `assist_entry_mode` e i percorsi `cdp_bootstrap` / `cdp_recovery` restano predisposti ma non implementati
+- la GUI bundle e il companion CLI sono coerenti col nuovo backend, ma il flusso interattivo end-to-end da bundle resta meno verificato del soak CLI/servizio
+
+## Come verificare
+- da `C:\\Users\\panda\\Desktop\\sboorrra\\affitto\\2.2_test`:
+- `.\\.venv\\Scripts\\python.exe -m unittest tests.test_private_only_and_logging`
+- `python -m unittest discover -s tests`
+- in VM:
+  - eseguire `python -m camoufox fetch` o provisioning equivalente
+  - lanciare `fetch-live-service`
+  - verificare in `docs/tmp_logs.md` o nei log runtime:
+    - `Using persistent Camoufox profile`
+    - `Fetch URL result. ... channel=camoufox`
+    - `Live fetch service cycle state. ... service_state=stable`
+    - riduzione o sparizione del pattern ripetuto:
+      - `Idealista detail verification flagged professional listing. ad_id=35256447`
+      - `Idealista detail verification flagged professional listing. ad_id=35231585`
+    - comparsa di `reused_professional>0` nelle righe `Idealista private-only DB cache reuse`

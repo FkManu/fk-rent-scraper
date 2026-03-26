@@ -34,3 +34,69 @@
 ## Stato attuale
 - baseline stabile con packaging GUI riparato e routing browser/guard piu robusti
 - patch viva ancora da chiudere sul piano operativo: validazione VM lunga di `idealista` e riduzione aperture dettaglio `private_only`
+- nuova linea `2.2_test` aperta come laboratorio separato, inizialmente allineata al codice di `2.1_stable` ma con charter e task propri
+- nella nuova linea `2.2_test` sono gia stati chiusi tre slice iniziali della Milestone 0:
+  - slice 1: telemetria minima, `RiskBudget`, `TelemetrySnapshot`, blocco del retry cross-browser immediato
+  - slice 2: enforcement prudente di `page_budget`, `retry_budget`, `detail_budget`, `cooldown_budget`
+  - slice 3: prima escalation di stato nel run fino a `assist_required` con `RunRiskState` e artifact piu leggibili
+- e stato aperto anche il primo slice della Milestone 1 / Session Model Reset:
+  - isolamento dei profili persistenti per `site/channel`
+  - ownership della sessione resa esplicita nel loop live
+- e stato chiuso un secondo slice della Milestone 1:
+  - pool di sessioni isolate per owner
+  - riuso limitato al solo owner `site/channel/profile`
+  - metriche summary su riuso same-site e cross-site
+- e stato chiuso un terzo slice della Milestone 1:
+  - pruning delle vecchie sessioni same-site quando cambia owner
+  - regola pratica: una sola identita viva per sito
+  - metrica summary `site_session_replace_count`
+- e stato chiuso un quarto slice della Milestone 1:
+  - churn same-site registrato per sito
+  - primo replace -> `suspect`
+  - replace ripetuto -> `assist_required`
+- e stato chiuso un primo slice della Milestone 1.5 / Continuous Scheduler:
+  - nuovo comando `fetch-live-service`
+  - cadenza continua derivata da `runtime.cycle_minutes`
+  - hard threshold per ciclo separata tramite `--cycle-max-minutes`
+  - nessun overlap tra cicli
+  - metriche summary `failure_count`, `overrun_count`, `missed_cycle_count`
+- e stato chiuso un secondo slice della Milestone 1.5 / Continuous Scheduler:
+  - stato minimo del servizio continuo
+  - `warmup`, `stable`, `degraded`, `assist_required`
+  - failure ripetuti del servizio promossi a stop pulito con richiesta di revisione
+- e stato chiuso un terzo slice della Milestone 1.5 / Continuous Scheduler:
+  - runtime condiviso cross-cycle per il servizio continuo
+  - `fetch-live-service` non richiama piu solo run isolati
+  - chiusura pulita del runtime condiviso a fine servizio
+- e stato chiuso un quarto slice della Milestone 1.5 / Continuous Scheduler:
+  - `fetch_live_once` restituisce ora un report di run
+  - il servizio legge `run_state`, `assist_required` e `stop_reason`
+  - run degradati ripetuti possono promuovere il servizio a `assist_required`
+- e stato chiuso un quinto slice della Milestone 1.5 / Continuous Scheduler:
+  - runtime disposition minima nel servizio continuo
+  - `cooldown/blocked` riciclano il solo slot del sito
+  - failure tecnico del ciclo ricicla il runtime condiviso
+  - `run_state=assist_required` ferma il servizio
+- e stato chiuso un sesto slice della Milestone 1.5 / Continuous Scheduler:
+  - il run report espone contesto per-sito del ciclo
+  - il servizio distingue meglio degrado locale e degrado multi-sito
+  - il recycle totale del runtime puo scattare anche su degrado multi-sito nello stesso run
+- aggiornamento successivo della baseline `2.2_test`:
+  - backend browser operativo portato a `camoufox`
+  - `camoufox-profile` nuovo root predefinito per i profili persistenti
+  - GUI e CLI allineate al default `camoufox`
+  - alias legacy `auto|firefox|chromium|chrome|msedge` mantenuti solo per compatibilita
+- aggiornamento operativo del `2026-03-26`:
+  - soak VM reale del servizio continuo con backend `camoufox`
+  - finestra osservata `11:59:51 -> 16:55:19`
+  - `60` cicli completati con servizio sempre `stable`
+  - nessun `degraded`, `blocked`, `cooling`, `assist_required`, `ERROR` o `Traceback`
+  - `idealista` mantiene forte continuita di sessione sullo stesso profilo
+  - `immobiliare` resta sano ma ricicla periodicamente il solo slot locale per `slot_reuse_cap`
+  - il limite aperto piu concreto si sposta dalla tenuta anti-bot alla precisione residua di `private_only`
+- fix successivo del `2026-03-26` su `private_only`:
+  - aggiunta memoria negativa dedicata per annunci professionali rilevati dal detail-check Idealista
+  - nuova tabella DB `private_only_agency_cache` separata dal flusso `listings`
+  - il detail-check salva ora i professionali trovati anche se vengono scartati dalla pipeline `private_only`
+  - il riuso DB `private_only` puo quindi evitare riaperture ripetute dello stesso annuncio professionale nei cicli successivi
+  - copertura aggiornata con test mirati sul salvataggio e sul riuso della memoria professionale

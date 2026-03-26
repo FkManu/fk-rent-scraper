@@ -33,7 +33,13 @@ from .notifiers import (
 )
 from .paths import APP_LOG_FILE, ensure_runtime_dirs, resolve_config_path, resolve_db_path
 from .pipeline import PipelineRunOptions, process_listings
-from .scrapers import fetch_live_once
+from .scrapers import (
+    LiveFetchServiceRuntime,
+    close_live_fetch_service_runtime,
+    fetch_live_once,
+    recycle_live_fetch_site_runtime,
+    service_runtime_site_slot_snapshot,
+)
 
 
 class RuntimeJobError(RuntimeError):
@@ -48,6 +54,79 @@ class NotifierBootstrapState:
     telegram_requested: bool = False
     email_degraded_reason: str = ""
     telegram_degraded_reason: str = ""
+
+
+@dataclass(frozen=True)
+class LiveServicePolicy:
+    cadence_sec: int
+    max_cycle_sec: int
+    max_cycles: int | None = None
+    restart_on_failure: bool = True
+
+
+@dataclass(slots=True)
+class LiveServiceState:
+    current_state: str = "warmup"
+    consecutive_failures: int = 0
+    consecutive_overruns: int = 0
+    consecutive_backlog_cycles: int = 0
+    consecutive_run_degraded_cycles: int = 0
+    assist_required: bool = False
+    assist_reason: str = ""
+
+
+@dataclass(frozen=True)
+class RuntimeDispositionDecision:
+    action: str = "keep"
+    site: str = ""
+    reason: str = ""
+
+
+_PREEMPTIVE_SITE_SLOT_RECYCLE_LIMITS: dict[str, dict[str, int]] = {
+    "immobiliare": {
+        "max_age_sec": 5400,
+        "max_reuse_count": 12,
+    }
+}
+
+
+def _maybe_preemptive_site_slot_recycle(
+    *,
+    slot_summary: dict[str, dict[str, object]],
+    logger,
+) -> RuntimeDispositionDecision:
+    if not slot_summary:
+        return RuntimeDispositionDecision()
+    for site, limits in _PREEMPTIVE_SITE_SLOT_RECYCLE_LIMITS.items():
+        snapshot = slot_summary.get(site)
+        if not snapshot:
+            continue
+        age_sec = int(snapshot.get("max_age_sec", 0) or 0)
+        reuse_count = int(snapshot.get("max_reuse_count", 0) or 0)
+        if age_sec < int(limits.get("max_age_sec", 0) or 0) and reuse_count < int(
+            limits.get("max_reuse_count", 0) or 0
+        ):
+            continue
+        reason_parts: list[str] = []
+        if age_sec >= int(limits.get("max_age_sec", 0) or 0):
+            reason_parts.append("session_age_cap")
+        if reuse_count >= int(limits.get("max_reuse_count", 0) or 0):
+            reason_parts.append("slot_reuse_cap")
+        logger.info(
+            "Preemptive site slot recycle candidate. site=%s age_sec=%s reuse_count=%s owner_count=%s channel=%s thresholds=%s",
+            site,
+            age_sec,
+            reuse_count,
+            int(snapshot.get("owner_count", 0) or 0),
+            str(snapshot.get("channel_label", "") or "unknown"),
+            limits,
+        )
+        return RuntimeDispositionDecision(
+            action="recycle_site_slot",
+            site=site,
+            reason="+".join(reason_parts) or "preventive_recycle",
+        )
+    return RuntimeDispositionDecision()
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -69,6 +148,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "test-email",
             "test-pipeline",
             "fetch-live-once",
+            "fetch-live-service",
         ],
         help="Command to run.",
     )
@@ -158,8 +238,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--headed", action="store_true", help="Use visible browser window for live fetch.")
     parser.add_argument(
         "--browser-channel",
-        default="auto",
-        help="Browser channel: auto|chromium|chrome|msedge.",
+        default="camoufox",
+        help="Browser backend: camoufox by default (legacy aliases accepted: auto|firefox|chromium|chrome|msedge).",
     )
     parser.add_argument("--max-per-site", type=int, default=0, help="Live fetch cap per site.")
     parser.add_argument("--nav-timeout-ms", type=int, default=45000, help="Live fetch navigation timeout.")
@@ -168,7 +248,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--profile-dir",
         default="",
-        help="Persistent browser profile directory for live fetch (default: runtime/playwright-profile).",
+        help="Persistent browser profile directory for live fetch (default: runtime/camoufox-profile).",
     )
     parser.add_argument(
         "--save-live-debug",
@@ -229,6 +309,23 @@ def _build_parser() -> argparse.ArgumentParser:
         default="off",
         help="Browser channel rotation: off|round_robin.",
     )
+    parser.add_argument(
+        "--cycle-max-minutes",
+        type=int,
+        default=10,
+        help="For fetch-live-service: hard overrun threshold per cycle in minutes.",
+    )
+    parser.add_argument(
+        "--max-cycles",
+        type=int,
+        default=0,
+        help="For fetch-live-service: stop after N cycles (0 = run continuously).",
+    )
+    parser.add_argument(
+        "--service-stop-flag",
+        default="",
+        help="For fetch-live-service: optional stop-request flag file used for graceful shutdown.",
+    )
     return parser
 
 
@@ -247,6 +344,12 @@ def _validate_runtime_config(config_path: Path) -> None:
         raise ConfigError("cycle_minutes cannot be lower than 5.")
 
 
+def _clone_args_without_save_overrides(args: argparse.Namespace) -> argparse.Namespace:
+    cloned = argparse.Namespace(**vars(args))
+    cloned.save_overrides = False
+    return cloned
+
+
 def _resolve_db_from_config(config_path: Path, value: str) -> Path:
     candidate = Path(value).expanduser()
     if candidate.is_absolute():
@@ -260,6 +363,40 @@ def _resolve_profiles_path(config_path: Path, raw: str) -> Path:
     if raw:
         return Path(raw).expanduser()
     return default_profiles_path(config_path)
+
+
+def _resolve_service_stop_flag_path(raw: str) -> Path | None:
+    value = (raw or "").strip()
+    if not value:
+        return None
+    return Path(value).expanduser()
+
+
+def _clear_service_stop_flag(path: Path | None) -> None:
+    if path is None or not path.exists():
+        return
+    path.unlink()
+
+
+def _is_service_stop_requested(path: Path | None) -> bool:
+    return bool(path is not None and path.exists())
+
+
+def _sleep_until_next_cycle_or_stop(
+    *,
+    sleep_sec: float,
+    stop_flag_path: Path | None,
+    monotonic_fn=time.monotonic,
+    sleep_fn=time.sleep,
+) -> bool:
+    remaining = max(0.0, sleep_sec)
+    while remaining > 0:
+        if _is_service_stop_requested(stop_flag_path):
+            return True
+        step = min(1.0, remaining)
+        sleep_fn(step)
+        remaining -= step
+    return _is_service_stop_requested(stop_flag_path)
 
 
 def _parse_true_false(value: str) -> bool:
@@ -292,8 +429,8 @@ def _parse_notify_mode(value: str) -> str:
 
 
 def _parse_browser_channel(value: str) -> str:
-    v = (value or "auto").strip().lower()
-    allowed = {"auto", "chromium", "chrome", "msedge"}
+    v = (value or "camoufox").strip().lower()
+    allowed = {"auto", "camoufox", "firefox", "chromium", "chrome", "msedge"}
     if v not in allowed:
         raise ConfigError(f"Invalid browser channel: {value}. Allowed: {', '.join(sorted(allowed))}")
     return v
@@ -354,7 +491,7 @@ def _reset_site_guard_state(path: Path, search_urls: list[str], logger) -> None:
                 "probe_after_utc": "",
                 "probe_attempts": 0,
             }
-    payload = {"version": 5, "last_channel": "chromium", "sites": sites}
+    payload = {"version": 6, "last_channel": "camoufox", "sites": sites}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     logger.info("Site guard state reset. file=%s sites=%s", path, len(sites))
@@ -741,6 +878,139 @@ def _log_pipeline_summary(result, send_real_notifications: bool, logger, prefix:
         )
 
 
+def _build_live_service_policy(config: AppConfig, args: argparse.Namespace) -> LiveServicePolicy:
+    cadence_minutes = int(config.runtime.cycle_minutes)
+    if cadence_minutes < 5:
+        raise ConfigError("cycle_minutes cannot be lower than 5.")
+
+    max_cycle_minutes = int(args.cycle_max_minutes or 0) or 10
+    if max_cycle_minutes < cadence_minutes:
+        raise ConfigError("cycle_max_minutes cannot be lower than cycle_minutes.")
+
+    max_cycles = int(args.max_cycles or 0)
+    if max_cycles < 0:
+        raise ConfigError("max_cycles cannot be negative.")
+
+    return LiveServicePolicy(
+        cadence_sec=cadence_minutes * 60,
+        max_cycle_sec=max_cycle_minutes * 60,
+        max_cycles=max_cycles or None,
+        restart_on_failure=bool(config.runtime.auto_restart_on_failure),
+    )
+
+
+def _count_missed_cycle_slots(*, cycle_started_monotonic: float, cycle_finished_monotonic: float, cadence_sec: int) -> int:
+    next_slot_monotonic = cycle_started_monotonic + cadence_sec
+    if cycle_finished_monotonic <= next_slot_monotonic:
+        return 0
+    return int((cycle_finished_monotonic - next_slot_monotonic) // cadence_sec) + 1
+
+
+def _mark_live_service_assist_required(service_state: LiveServiceState, reason: str) -> None:
+    service_state.assist_required = True
+    service_state.assist_reason = service_state.assist_reason or reason
+    service_state.current_state = "assist_required"
+
+
+def _advance_live_service_state(
+    *,
+    service_state: LiveServiceState,
+    cycle_failed: bool,
+    cycle_overrun: bool,
+    missed_slots: int,
+    run_state: str = "",
+    run_assist_required: bool = False,
+    run_assist_reason: str = "",
+    run_stop_requested: bool = False,
+) -> tuple[str, str]:
+    previous_state = service_state.current_state
+    if service_state.assist_required:
+        return (previous_state, service_state.current_state)
+
+    run_degraded = run_state in {"challenge_seen", "degraded", "cooldown", "blocked"} or run_stop_requested
+    service_state.consecutive_failures = service_state.consecutive_failures + 1 if cycle_failed else 0
+    service_state.consecutive_overruns = service_state.consecutive_overruns + 1 if cycle_overrun else 0
+    service_state.consecutive_backlog_cycles = service_state.consecutive_backlog_cycles + 1 if missed_slots > 0 else 0
+    service_state.consecutive_run_degraded_cycles = (
+        service_state.consecutive_run_degraded_cycles + 1 if run_degraded else 0
+    )
+
+    if run_assist_required or run_state == "assist_required":
+        _mark_live_service_assist_required(service_state, run_assist_reason or "run_assist_required")
+    elif service_state.consecutive_failures >= 2:
+        _mark_live_service_assist_required(service_state, "repeated_cycle_failures")
+    elif service_state.consecutive_overruns >= 2:
+        _mark_live_service_assist_required(service_state, "repeated_cycle_overruns")
+    elif cycle_failed or cycle_overrun or missed_slots > 0 or run_degraded:
+        service_state.current_state = "degraded"
+    else:
+        service_state.current_state = "stable"
+
+    return (previous_state, service_state.current_state)
+
+
+def _log_live_service_state(*, logger, previous_state: str, service_state: LiveServiceState) -> None:
+    if previous_state == service_state.current_state and not service_state.assist_required:
+        return
+    logger.warning(
+        "Live service state. state=%s previous_state=%s consecutive_failures=%s consecutive_overruns=%s consecutive_backlog_cycles=%s consecutive_run_degraded_cycles=%s assist_required=%s assist_reason=%s",
+        service_state.current_state,
+        previous_state or "none",
+        service_state.consecutive_failures,
+        service_state.consecutive_overruns,
+        service_state.consecutive_backlog_cycles,
+        service_state.consecutive_run_degraded_cycles,
+        service_state.assist_required,
+        service_state.assist_reason or "none",
+    )
+
+
+def _decide_runtime_disposition(
+    *,
+    cycle_failed: bool,
+    cycle_report,
+    service_state: LiveServiceState,
+) -> RuntimeDispositionDecision:
+    if cycle_report is not None and bool(getattr(cycle_report, "assist_required", False)):
+        return RuntimeDispositionDecision(
+            action="stop_service",
+            site=str(getattr(cycle_report, "run_state_site", "") or ""),
+            reason=str(getattr(cycle_report, "assist_reason", "") or "run_assist_required"),
+        )
+
+    if cycle_failed:
+        return RuntimeDispositionDecision(action="recycle_runtime", reason="cycle_failure")
+
+    run_state = str(getattr(cycle_report, "run_state", "") or "")
+    run_state_site = str(getattr(cycle_report, "run_state_site", "") or "")
+    site_outcome_tiers = dict(getattr(cycle_report, "site_outcome_tiers", {}) or {})
+    affected_sites = sorted(site for site, tier in site_outcome_tiers.items() if tier in {"degraded", "cooling", "blocked"})
+    if run_state in {"cooldown", "blocked"} and run_state_site:
+        return RuntimeDispositionDecision(action="recycle_site_slot", site=run_state_site, reason=run_state)
+
+    if len(affected_sites) == 1:
+        affected_site = affected_sites[0]
+        affected_tier = str(site_outcome_tiers.get(affected_site, "") or "")
+        if affected_tier in {"cooling", "blocked"}:
+            return RuntimeDispositionDecision(
+                action="recycle_site_slot",
+                site=affected_site,
+                reason=f"site_{affected_tier}",
+            )
+
+    if len(affected_sites) > 1:
+        return RuntimeDispositionDecision(action="recycle_runtime", reason="multi_site_degraded")
+
+    if service_state.consecutive_run_degraded_cycles >= 2 and run_state_site:
+        return RuntimeDispositionDecision(
+            action="recycle_site_slot",
+            site=run_state_site,
+            reason="persistent_run_degraded",
+        )
+
+    return RuntimeDispositionDecision()
+
+
 def _run_test_pipeline(config_path: Path, profiles_path: Path, args: argparse.Namespace, logger) -> None:
     config = load_or_create_config(config_path)
     config, changed = _apply_config_overrides(config, args)
@@ -793,7 +1063,15 @@ def _run_test_pipeline(config_path: Path, profiles_path: Path, args: argparse.Na
     )
 
 
-def _run_fetch_live_once(config_path: Path, profiles_path: Path, args: argparse.Namespace, logger) -> None:
+def _run_fetch_live_once(
+    config_path: Path,
+    profiles_path: Path,
+    args: argparse.Namespace,
+    logger,
+    *,
+    service_runtime: LiveFetchServiceRuntime | None = None,
+    fetch_runner=None,
+):
     config = load_or_create_config(config_path)
     config, changed = _apply_config_overrides(config, args)
     if args.save_overrides and changed:
@@ -810,7 +1088,7 @@ def _run_fetch_live_once(config_path: Path, profiles_path: Path, args: argparse.
     headless = not bool(args.headed)
     browser_channel = _parse_browser_channel(args.browser_channel)
     channel_rotation_mode = _parse_channel_rotation_mode(args.channel_rotation_mode)
-    profile_dir = args.profile_dir.strip() or str((config_path.parent / "playwright-profile").resolve())
+    profile_dir = args.profile_dir.strip() or str((config_path.parent / "camoufox-profile").resolve())
     debug_dir: str | None = None
     if args.save_live_debug or args.live_debug_dir.strip():
         debug_dir = args.live_debug_dir.strip() or str((config_path.parent / "live_debug").resolve())
@@ -836,38 +1114,55 @@ def _run_fetch_live_once(config_path: Path, profiles_path: Path, args: argparse.
         notify_mode,
         bool(args.send_real_notifications),
     )
+    fetch_kwargs = {
+        "search_urls": config.search_urls,
+        "extraction": config.extraction,
+        "max_per_site": max_per_site,
+        "headless": headless,
+        "wait_after_goto_ms": max(100, args.wait_after_goto_ms),
+        "nav_timeout_ms": max(1000, args.nav_timeout_ms),
+        "captcha_mode": config.runtime.captcha_mode,
+        "captcha_wait_sec": max(10, args.captcha_wait_sec),
+        "profile_dir": profile_dir,
+        "debug_dir": debug_dir,
+        "browser_channel": browser_channel,
+        "site_guard_enabled": site_guard_enabled,
+        "site_guard_state_path": str(guard_state_path),
+        "guard_jitter_min_sec": guard_jitter_min,
+        "guard_jitter_max_sec": guard_jitter_max,
+        "guard_base_cooldown_sec": guard_base_cooldown_min * 60,
+        "guard_max_cooldown_sec": guard_max_cooldown_min * 60,
+        "channel_rotation_mode": channel_rotation_mode,
+        "guard_ignore_cooldown": guard_ignore_cooldown,
+        "artifact_retention_days": config.storage.retention_days,
+        "listing_cache_db_path": str(db_path),
+        "service_runtime": service_runtime,
+        "logger": logger,
+    }
+    if fetch_runner is None:
+        fetch_runner = lambda kwargs: asyncio.run(fetch_live_once(**kwargs))
     try:
-        listings = asyncio.run(
-            fetch_live_once(
-                search_urls=config.search_urls,
-                extraction=config.extraction,
-                max_per_site=max_per_site,
-                headless=headless,
-                wait_after_goto_ms=max(100, args.wait_after_goto_ms),
-                nav_timeout_ms=max(1000, args.nav_timeout_ms),
-                captcha_mode=config.runtime.captcha_mode,
-                captcha_wait_sec=max(10, args.captcha_wait_sec),
-                profile_dir=profile_dir,
-                debug_dir=debug_dir,
-                browser_channel=browser_channel,
-                site_guard_enabled=site_guard_enabled,
-                site_guard_state_path=str(guard_state_path),
-                guard_jitter_min_sec=guard_jitter_min,
-                guard_jitter_max_sec=guard_jitter_max,
-                guard_base_cooldown_sec=guard_base_cooldown_min * 60,
-                guard_max_cooldown_sec=guard_max_cooldown_min * 60,
-                channel_rotation_mode=channel_rotation_mode,
-                guard_ignore_cooldown=guard_ignore_cooldown,
-                listing_cache_db_path=str(db_path),
-                logger=logger,
-            )
-        )
+        fetch_report = fetch_runner(fetch_kwargs)
     except Exception as exc:
         logger.error("Live fetch stage failed. module=scraping error=%s", _flatten_error_text(exc))
         logger.warning("Live fetch run stopped cleanly before pipeline. one_shot=True")
         raise RuntimeJobError("Live fetch failed.") from exc
 
+    listings = fetch_report.listings
     logger.info("Live fetch stage completed. extracted=%s", len(listings))
+    logger.info(
+        "Live fetch cycle report. run_state=%s run_state_site=%s assist_required=%s assist_reason=%s stop_requested=%s stop_reason=%s retry_count=%s detail_touch_count=%s identity_switch=%s site_outcome_tiers=%s",
+        fetch_report.run_state,
+        fetch_report.run_state_site or "none",
+        fetch_report.assist_required,
+        fetch_report.assist_reason or "none",
+        fetch_report.stop_requested,
+        fetch_report.stop_reason or "none",
+        fetch_report.retry_count,
+        fetch_report.detail_touch_count,
+        fetch_report.identity_switch_count,
+        dict(fetch_report.site_outcome_tiers),
+    )
     if not listings:
         logger.info("Live fetch returned zero listings. pipeline will complete without notifications.")
 
@@ -899,6 +1194,269 @@ def _run_fetch_live_once(config_path: Path, profiles_path: Path, args: argparse.
         prefix="Live pipeline completed.",
     )
     logger.info("Live fetch run finished. one_shot=True clean_shutdown=True")
+    return fetch_report
+
+
+def _run_fetch_live_service(
+    config_path: Path,
+    profiles_path: Path,
+    args: argparse.Namespace,
+    logger,
+    *,
+    monotonic_fn=time.monotonic,
+    sleep_fn=time.sleep,
+) -> None:
+    config = load_or_create_config(config_path)
+    config, changed = _apply_config_overrides(config, args)
+    if args.save_overrides and changed:
+        save_config(config, config_path)
+        logger.info("Saved config overrides: %s", ", ".join(sorted(set(changed))))
+
+    policy = _build_live_service_policy(config, args)
+    run_args = _clone_args_without_save_overrides(args)
+    stop_flag_path = _resolve_service_stop_flag_path(args.service_stop_flag)
+    _clear_service_stop_flag(stop_flag_path)
+    service_runtime = LiveFetchServiceRuntime()
+    service_loop = asyncio.new_event_loop()
+    cycle_number = 0
+    overrun_count = 0
+    failure_count = 0
+    missed_cycle_count = 0
+    service_state = LiveServiceState()
+    next_cycle_monotonic = monotonic_fn()
+
+    logger.info(
+        "Starting live fetch service. cadence_sec=%s max_cycle_sec=%s max_cycles=%s auto_restart_on_failure=%s",
+        policy.cadence_sec,
+        policy.max_cycle_sec,
+        policy.max_cycles or "continuous",
+        policy.restart_on_failure,
+    )
+
+    try:
+        asyncio.set_event_loop(service_loop)
+        while True:
+            if _is_service_stop_requested(stop_flag_path):
+                logger.info(
+                    "Live fetch service stop requested before cycle start. cycles=%s overrun_count=%s failure_count=%s missed_cycle_count=%s service_state=%s clean_shutdown=True",
+                    cycle_number,
+                    overrun_count,
+                    failure_count,
+                    missed_cycle_count,
+                    service_state.current_state,
+                )
+                return
+
+            if policy.max_cycles is not None and cycle_number >= policy.max_cycles:
+                logger.info(
+                    "Live fetch service finished. cycles=%s overrun_count=%s failure_count=%s missed_cycle_count=%s service_state=%s assist_required=%s assist_reason=%s clean_shutdown=True",
+                    cycle_number,
+                    overrun_count,
+                    failure_count,
+                    missed_cycle_count,
+                    service_state.current_state,
+                    service_state.assist_required,
+                    service_state.assist_reason or "none",
+                )
+                return
+
+            now_monotonic = monotonic_fn()
+            sleep_sec = max(0.0, next_cycle_monotonic - now_monotonic)
+            if sleep_sec > 0:
+                logger.info(
+                    "Waiting for next live cycle. cycle=%s sleep_sec=%.3f cadence_sec=%s",
+                    cycle_number + 1,
+                    sleep_sec,
+                    policy.cadence_sec,
+                )
+                stop_requested = _sleep_until_next_cycle_or_stop(
+                    sleep_sec=sleep_sec,
+                    stop_flag_path=stop_flag_path,
+                    monotonic_fn=monotonic_fn,
+                    sleep_fn=sleep_fn,
+                )
+                if stop_requested:
+                    logger.info(
+                        "Live fetch service stopped cleanly while waiting for next cycle. cycles=%s overrun_count=%s failure_count=%s missed_cycle_count=%s service_state=%s clean_shutdown=True",
+                        cycle_number,
+                        overrun_count,
+                        failure_count,
+                        missed_cycle_count,
+                        service_state.current_state,
+                    )
+                    return
+
+            cycle_started_monotonic = monotonic_fn()
+            cycle_number += 1
+            cycle_delay_sec = max(0.0, cycle_started_monotonic - next_cycle_monotonic)
+            logger.info(
+                "Live fetch service cycle started. cycle=%s cycle_delay_sec=%.3f cadence_sec=%s pooled_sessions=%s",
+                cycle_number,
+                cycle_delay_sec,
+                policy.cadence_sec,
+                len(service_runtime.session_slots),
+            )
+
+            cycle_failed = False
+            cycle_report = None
+            try:
+                cycle_report = _run_fetch_live_once(
+                    config_path,
+                    profiles_path,
+                    run_args,
+                    logger,
+                    service_runtime=service_runtime,
+                    fetch_runner=lambda kwargs: service_loop.run_until_complete(fetch_live_once(**kwargs)),
+                )
+            except RuntimeJobError:
+                cycle_failed = True
+                failure_count += 1
+                logger.warning(
+                    "Live fetch service cycle failed. cycle=%s failure_count=%s auto_restart_on_failure=%s pooled_sessions=%s",
+                    cycle_number,
+                    failure_count,
+                    policy.restart_on_failure,
+                    len(service_runtime.session_slots),
+                )
+                if not policy.restart_on_failure:
+                    raise
+
+            cycle_finished_monotonic = monotonic_fn()
+            cycle_elapsed_sec = max(0.0, cycle_finished_monotonic - cycle_started_monotonic)
+            cycle_overrun = cycle_elapsed_sec > policy.max_cycle_sec
+            if cycle_overrun:
+                overrun_count += 1
+                logger.warning(
+                    "Live fetch service cycle exceeded hard threshold. cycle=%s cycle_elapsed_sec=%.3f max_cycle_sec=%s overrun_count=%s",
+                    cycle_number,
+                    cycle_elapsed_sec,
+                    policy.max_cycle_sec,
+                    overrun_count,
+                )
+
+            missed_slots = _count_missed_cycle_slots(
+                cycle_started_monotonic=cycle_started_monotonic,
+                cycle_finished_monotonic=cycle_finished_monotonic,
+                cadence_sec=policy.cadence_sec,
+            )
+            if missed_slots:
+                missed_cycle_count += missed_slots
+                logger.warning(
+                    "Live fetch service cycle missed scheduled slots. cycle=%s missed_slots=%s missed_cycle_count=%s cycle_elapsed_sec=%.3f",
+                    cycle_number,
+                    missed_slots,
+                    missed_cycle_count,
+                    cycle_elapsed_sec,
+                )
+
+            logger.info(
+                "Live fetch service cycle finished. cycle=%s cycle_elapsed_sec=%.3f cycle_failed=%s cycle_overrun=%s missed_slots=%s pooled_sessions=%s",
+                cycle_number,
+                cycle_elapsed_sec,
+                cycle_failed,
+                cycle_overrun,
+                missed_slots,
+                len(service_runtime.session_slots),
+            )
+            previous_state, current_state = _advance_live_service_state(
+                service_state=service_state,
+                cycle_failed=cycle_failed,
+                cycle_overrun=cycle_overrun,
+                missed_slots=missed_slots,
+                run_state=getattr(cycle_report, "run_state", ""),
+                run_assist_required=bool(getattr(cycle_report, "assist_required", False)),
+                run_assist_reason=str(getattr(cycle_report, "assist_reason", "") or ""),
+                run_stop_requested=bool(getattr(cycle_report, "stop_requested", False)),
+            )
+            _log_live_service_state(logger=logger, previous_state=previous_state, service_state=service_state)
+            logger.info(
+                "Live fetch service cycle state. cycle=%s service_state=%s assist_required=%s assist_reason=%s pooled_sessions=%s run_state=%s run_assist_required=%s run_stop_requested=%s",
+                cycle_number,
+                current_state,
+                service_state.assist_required,
+                service_state.assist_reason or "none",
+                len(service_runtime.session_slots),
+                getattr(cycle_report, "run_state", "") or "none",
+                bool(getattr(cycle_report, "assist_required", False)),
+                bool(getattr(cycle_report, "stop_requested", False)),
+            )
+            slot_summary = service_runtime_site_slot_snapshot(
+                service_runtime,
+                now_monotonic=cycle_finished_monotonic,
+            )
+            if slot_summary:
+                logger.info(
+                    "Live fetch service pooled slot summary. cycle=%s slots=%s",
+                    cycle_number,
+                    slot_summary,
+                )
+            disposition = _decide_runtime_disposition(
+                cycle_failed=cycle_failed,
+                cycle_report=cycle_report,
+                service_state=service_state,
+            )
+            if disposition.action == "keep":
+                disposition = _maybe_preemptive_site_slot_recycle(
+                    slot_summary=slot_summary,
+                    logger=logger,
+                )
+            logger.info(
+                "Live fetch service runtime disposition. cycle=%s action=%s site=%s reason=%s pooled_sessions=%s",
+                cycle_number,
+                disposition.action,
+                disposition.site or "none",
+                disposition.reason or "none",
+                len(service_runtime.session_slots),
+            )
+            if disposition.action == "recycle_site_slot":
+                recycled_slots = service_loop.run_until_complete(
+                    recycle_live_fetch_site_runtime(service_runtime, disposition.site)
+                )
+                logger.warning(
+                    "Live fetch service recycled site slot. cycle=%s site=%s recycled_slots=%s reason=%s pooled_sessions=%s",
+                    cycle_number,
+                    disposition.site,
+                    recycled_slots,
+                    disposition.reason,
+                    len(service_runtime.session_slots),
+                )
+            elif disposition.action == "recycle_runtime":
+                service_loop.run_until_complete(close_live_fetch_service_runtime(service_runtime))
+                service_runtime = LiveFetchServiceRuntime()
+                logger.warning(
+                    "Live fetch service recycled shared runtime. cycle=%s reason=%s pooled_sessions=%s",
+                    cycle_number,
+                    disposition.reason,
+                    len(service_runtime.session_slots),
+                )
+
+            if service_state.assist_required or disposition.action == "stop_service":
+                logger.warning(
+                    "Live fetch service stopped for manual review. cycle=%s service_state=%s assist_reason=%s pooled_sessions=%s",
+                    cycle_number,
+                    service_state.current_state,
+                    service_state.assist_reason,
+                    len(service_runtime.session_slots),
+                )
+                raise RuntimeJobError("Live fetch service requires assistance.")
+            if _is_service_stop_requested(stop_flag_path):
+                logger.info(
+                    "Live fetch service stopped cleanly after cycle. cycle=%s overrun_count=%s failure_count=%s missed_cycle_count=%s service_state=%s clean_shutdown=True",
+                    cycle_number,
+                    overrun_count,
+                    failure_count,
+                    missed_cycle_count,
+                    service_state.current_state,
+                )
+                return
+            next_cycle_monotonic += policy.cadence_sec
+    finally:
+        try:
+            service_loop.run_until_complete(close_live_fetch_service_runtime(service_runtime))
+        finally:
+            asyncio.set_event_loop(None)
+            service_loop.close()
+        _clear_service_stop_flag(stop_flag_path)
 
 
 def run(argv: list[str] | None = None) -> int:
@@ -978,6 +1536,10 @@ def run(argv: list[str] | None = None) -> int:
 
         if args.command == "fetch-live-once":
             _run_fetch_live_once(config_path, profiles_path, args, logger)
+            return 0
+
+        if args.command == "fetch-live-service":
+            _run_fetch_live_service(config_path, profiles_path, args, logger)
             return 0
 
         db = Database(db_path)

@@ -1,88 +1,94 @@
 # NEXT_STEPS.md
 
 ## Punto di partenza
-Questa root `2.1_stable` e la baseline privata pulita da cui ripartire.
+Questa root `2.2_test` non e piu una foundation embrionale.
+Va trattata come preview in hardening.
 
-Per ricostruire il contesto operativo minimo leggere prima:
-1. `docs/context/HANDOFF.md`
-2. `docs/context/2_1_STABLE_MANIFEST.md`
-3. `docs/context/codex/REVIEW_2_1_STABLE.md`
+Oggi il ramo ha gia:
+- backend operativo predefinito `camoufox`
+- GUI e CLI allineate allo stesso backend
+- servizio continuo reale sopra `fetch-live-once`
+- soak VM lungo del `2026-03-26` con esito molto pulito
+
+Per ricostruire il contesto minimo leggere prima:
+1. `docs/risk_scoring_e_griglia_segnali_antibot.md`
+2. `docs/context/HANDOFF.md`
+3. `docs/context/STRATEGY_2_2_TEST.md`
+4. `docs/context/STATE_MACHINE_2_2_TEST.md`
+5. `docs/context/EXPERIMENT_PLAN_2_2_TEST.md`
+6. `docs/context/STOP_TRIGGERS_2_2_TEST.md`
+7. `docs/tmp_logs.md`
 
 ## Priorita ragionevoli da qui in avanti
-1. Validazione VM lunga della patch attuale **site guard + browser routing + private_only**:
-   - confermare che `idealista` non ricada in lunghe sequenze di solo `cooldown_active` dopo un `interstitial_datadome`
-   - verificare la presenza dei log di probe controllata del cooldown, invece del reset manuale come via standard
-   - confermare che `idealista` usi `msedge` installato quando disponibile e che `immobiliare` resti su `chrome`
-   - osservare quando scatta il retry con browser alternativo e se salva davvero qualche ciclo bloccato
-2. Validazione VM della riduzione aperture dettaglio in `private_only`:
-   - confermare che gli annunci gia presenti nel DB non vengano piu riaperti per riclassificazione
-   - misurare il delta tra primo ciclo e cicli successivi nei log `Idealista private-only detail verification start`
-   - verificare che i professionali gia noti nel DB vengano riusati senza nuova visita dettaglio
-   - continuare a misurare `excluded_agency` e `allowed_without_agency_signal` per capire quanto resta ancora davvero `unknown`
-3. Idea da approfondire in seguito: modalita opzionale **browser reale via CDP**:
-   - non sostituire il path corrente `managed`; la modalita CDP deve restare opzionale
-   - target operativo: usare un browser Chromium reale gia aperto dall'utente, collegandosi a `http://127.0.0.1:9222`
-   - caso d'uso principale: bootstrap manuale challenge/login/2FA o recovery assistita quando `idealista` richiede una sessione umana gia calda
-   - prerequisiti da documentare chiaramente:
-     - browser avviato manualmente con `--remote-debugging-port=9222`
-     - profilo dedicato separato da quello personale
-     - nessuna chiusura automatica del browser fisico da parte dell'app
-  - first step consigliato, solo se la riapriremo davvero:
-     - patch CLI-only
-     - nessuna GUI iniziale
-     - nessuna rotazione canale automatica in modalita CDP
-     - nessun retry cross-browser automatico in modalita CDP
-     - strategia pagina prudente: preferire nuova tab dedicata rispetto al riuso aggressivo della tab utente
-4. Continuare il lavoro di qualita parser solo dove serve:
-   - ridurre i casi `partial_success_degraded`
-   - migliorare soprattutto la lettura dei segnali agenzia su `idealista`
-   - se serve, aggiungere telemetria leggera sugli annunci `private_only_unknown` residui per capire cosa passa ancora senza segnale ne in card ne in dettaglio
-5. Chiusura operativa pre-push:
-   - verificare l'hardening Windows della log rotation su run piu lunghi / GUI + subprocess
-   - fare pulizia del working tree per la repo GitHub privata
-   - escludere stabilmente i `docs/tmp_logs*.md` locali e selezionare i file docs/context da pubblicare
-6. Solo dopo questi punti tornare su:
-   - hardening/testability piu ampio del core live
-   - installazione/distribuzione Windows piu blindata
-   - rifinitura UX mirata
-   - futura base operativa per vendibilita/supporto
-
-Per il dettaglio completo vedere:
-- `docs/context/ROADMAP_NEXT_MILESTONES.md`
-- `docs/context/codex/TASK_FIRST_RUN_RELIABILITY.md`
-- `docs/context/codex/TASK_OBSERVABLE_AUTOHEALING.md`
-
-## Stato GitHub
-- baseline privata gia pubblicata come repo privata:
-  - `FkManu/fk-rent-scraper`
-- branch attuale:
-  - `main`
-- commit iniziale:
-  - `Initial private baseline from 2.1_stable`
+1. Precisione `private_only`:
+   - verificare in soak che la nuova memoria negativa venga davvero riusata
+   - osservare `reused_professional`
+   - confermare la riduzione delle riaperture ripetute sugli stessi `ad_id`
+   - ridurre `allowed_without_agency_signal`
+   - capire se il problema residuo e piu forte su `immobiliare`, su `idealista`, o su entrambi
+   - aggiungere segnali forti solo dove migliorano la precisione senza rialzare troppo il costo interazionale
+   - mantenere la distinzione tra:
+     - filtro URL lato sito
+     - filtro hard locale del parser/pipeline
+2. Session model reset:
+   - consolidare l'ownership di browser/context/page sul lifecycle lungo
+   - mantenere `cross_site_session_reuse_count` a zero salvo decisione esplicita contraria
+   - introdurre una lettura piu chiara del perche uno slot venga riciclato
+   - decidere se il recycle preventivo same-site debba restare solo su `immobiliare` o diventare policy piu generale
+3. Orchestrazione 24/7:
+   - promuovere il soak del `2026-03-26` a baseline comparativa del ramo
+   - validare se i recycle locali periodici su `immobiliare` sono fisiologici o conservativi oltre il necessario
+   - raffinare la policy del runtime condiviso solo dopo confronto su run comparabili
+   - tenere separati:
+     - `recycle_site_slot`
+     - `recycle_runtime`
+     - `stop_service`
+4. Silent risk policy:
+   - mantenere niente retry cross-browser immediato di default
+   - preservare il budget basso di identita
+   - non allargare i budget solo per inseguire qualche listing in piu
+5. Preview release hygiene:
+   - mantenere ordinati i markdown vivi di contesto
+   - evitare duplicazioni tra `README`, `HANDOFF`, `NEXT_STEPS` e `codex/OUTPUT_CURRENT`
+   - trattare `dist/` come artefatto build locale, non come contenuto repo
+6. Solo dopo i punti sopra:
+   - `cdp_bootstrap`
+   - `cdp_recovery`
+   - osservabilita avanzata su network/TLS/device checks
 
 ## Cose da evitare
-- non reimportare runtime, build, dist o transcript grezzi in questa root
-- non riaprire `v1_stable` come base tecnica
-- non aggiungere nuove feature solo perche la root e pulita
+- non usare `2.2_test` per bugfix generici della baseline shipping
+- non riaprire subito la discussione multi-browser: nel ramo oggi il backend reale e `camoufox`
+- non promuovere a "problema motore" una questione che oggi sembra soprattutto di precisione `private_only`
+- non fare patchone che mischia parser, packaging e session strategy
+- non committare log, runtime, build temporanei o dump locali
 
 ## Regola pratica
-Nuove patch si aprono da qui, con scope piccolo e verificabile.
+Ogni patch di `2.2_test` deve:
+- ridurre rumore
+oppure
+- aumentare continuita
+oppure
+- migliorare in modo misurabile la precisione `private_only`
 
-## Nota operativa aggiornata
-- la review VM del 2026-03-25 ha mostrato che gli intoppi prioritari non erano chiusi:
-  - GUI bundle non avviabile per packaging Tk incompleto
-  - `idealista` poteva ricadere in un cooldown del site guard percepito come "loop di protezione"
-  - il fallback da `msedge` a `chrome` su bundle peggiorava la probabilita di `interstitial_datadome`
-- questi punti sono stati corretti nel workspace:
-  - packaging GUI con runtime Tcl/Tk incluso
-  - cooldown interstitial con probe controllata e clear challenge piu severo
-  - uso dei browser reali installati e retry mirato con browser alternativo sui blocked outcome
-  - riuso del DB per tagliare le visite dettaglio `private_only`
-- la priorita quindi resta una sola:
-  - validare in VM che il nuovo equilibrio regga per qualche ora senza reset manuali frequenti e con meno aperture dettaglio superflue
-- valutazione strategica aggiuntiva del 2026-03-25:
-  - una modalita `connect_over_cdp` puo avere senso come strumento specialistico di recovery/stabilizzazione
-  - non va resa default:
-    - richiede browser gia aperto e preparato manualmente
-    - Playwright la documenta come connessione a fedelta inferiore rispetto al protocollo Playwright pieno
-    - complica lifecycle, cleanup e supporto se usata come percorso standard
+Se non fa nessuna di queste cose, probabilmente non appartiene a questa root.
+
+## Copertura attuale sintetica
+- coperto bene:
+  - continuita di sessione per sito
+  - backend `camoufox` come percorso operativo unico del ramo
+  - riduzione churn e retry impulsivi
+  - telemetria minima del run
+  - orchestrazione continua del servizio
+  - runtime condiviso tra cicli del servizio
+  - allineamento esplicito tra `run_state` e `service_state`
+  - runtime disposition minima del servizio
+  - soak VM lungo comparabile con servizio `stable`
+- coperto solo in parte:
+  - policy documentata del recycle preventivo per sito
+  - precisione forte del filtro `private_only`
+  - recovery assistita
+- non ancora coperto:
+  - segnali rete/TLS
+  - JS runtime / device checks come osservabilita dedicata
+  - percorso `cdp_bootstrap` / `cdp_recovery` operativo

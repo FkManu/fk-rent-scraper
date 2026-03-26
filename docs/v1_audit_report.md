@@ -1,6 +1,10 @@
 ﻿# Audit tecnico `v1_stable` (2026-03-11)
 
 ## Scope
+
+Nota storica:
+- questo audit descrive la baseline `v1_stable` pre-migrazione.
+- i riferimenti a Playwright/Chrome sono storici e non rappresentano il backend operativo corrente di `2.2_test`, che ora usa `camoufox` come default.
 Analisi completa della base esistente in `v1_stable` con focus su:
 - stabilita runtime
 - correttezza deduplica e notifiche

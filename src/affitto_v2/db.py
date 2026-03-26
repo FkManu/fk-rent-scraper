@@ -41,6 +41,21 @@ CREATE TABLE IF NOT EXISTS blocked_agency_patterns (
   created_ts INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS private_only_agency_cache (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  site TEXT NOT NULL,
+  search_hash TEXT NOT NULL,
+  ad_id TEXT NOT NULL,
+  agency TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT '',
+  first_seen_ts INTEGER NOT NULL,
+  last_seen_ts INTEGER NOT NULL,
+  UNIQUE(site, search_hash, ad_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_private_only_agency_cache_lookup
+  ON private_only_agency_cache(site, search_hash, ad_id, last_seen_ts);
+
 CREATE TABLE IF NOT EXISTS app_kv (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
@@ -215,8 +230,10 @@ class Database:
         if not cleaned_ids:
             return {}
         placeholders = ",".join("?" for _ in cleaned_ids)
-        params: list[Any] = [site.strip().lower(), build_search_hash(search_url), *cleaned_ids]
-        query = f"""
+        normalized_site = site.strip().lower()
+        search_hash = build_search_hash(search_url)
+        params: list[Any] = [normalized_site, search_hash, *cleaned_ids]
+        listing_query = f"""
             SELECT ad_id, agency, last_seen_ts
             FROM listings
             WHERE site = ?
@@ -224,15 +241,67 @@ class Database:
               AND ad_id IN ({placeholders})
             ORDER BY last_seen_ts DESC, id DESC
         """
+        cache_query = f"""
+            SELECT ad_id, agency, last_seen_ts
+            FROM private_only_agency_cache
+            WHERE site = ?
+              AND search_hash = ?
+              AND ad_id IN ({placeholders})
+            ORDER BY last_seen_ts DESC, id DESC
+        """
         out: dict[str, str] = {}
+        seen_ts: dict[str, int] = {}
         with self._connect() as con:
-            rows = con.execute(query, params).fetchall()
-            for row in rows:
-                ad_id = str(row["ad_id"] or "").strip()
-                if not ad_id or ad_id in out:
-                    continue
-                out[ad_id] = str(row["agency"] or "").strip()
+            for query in (listing_query, cache_query):
+                rows = con.execute(query, params).fetchall()
+                for row in rows:
+                    ad_id = str(row["ad_id"] or "").strip()
+                    if not ad_id:
+                        continue
+                    ts = int(row["last_seen_ts"] or 0)
+                    if ad_id in seen_ts and seen_ts[ad_id] >= ts:
+                        continue
+                    seen_ts[ad_id] = ts
+                    out[ad_id] = str(row["agency"] or "").strip()
         return out
+
+    def upsert_private_only_agency(
+        self,
+        *,
+        site: str,
+        search_url: str,
+        ad_id: str,
+        agency: str,
+        source: str = "",
+    ) -> None:
+        normalized_site = site.strip().lower()
+        normalized_ad_id = str(ad_id).strip()
+        normalized_agency = str(agency).strip()
+        if not normalized_site or not normalized_ad_id or not normalized_agency:
+            return
+        now = int(time.time())
+        with self._connect() as con:
+            con.execute(
+                """
+                INSERT INTO private_only_agency_cache(
+                    site, search_hash, ad_id, agency, source, first_seen_ts, last_seen_ts
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(site, search_hash, ad_id) DO UPDATE
+                  SET agency = excluded.agency,
+                      source = excluded.source,
+                      last_seen_ts = excluded.last_seen_ts
+                """,
+                (
+                    normalized_site,
+                    build_search_hash(search_url),
+                    normalized_ad_id,
+                    normalized_agency,
+                    source.strip(),
+                    now,
+                    now,
+                ),
+            )
+            con.commit()
 
     def agency_is_blocked(self, agency_name: str) -> tuple[bool, str]:
         value = agency_name or ""

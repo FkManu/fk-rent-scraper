@@ -1,74 +1,117 @@
 # HANDOFF.md
 
 ## Stato attuale
-- `2.1_stable` e la baseline privata viva del progetto.
-- questa root contiene solo codice prodotto, packaging/script ripetibili, docs utili e contesto essenziale
-- runtime, build, dist, cache, transcript grezzi e stato Codex transitorio sono stati esclusi dal taglio
-- dopo i test VM del 2026-03-25 sono stati assorbiti tre intoppi prioritari:
-  - la dist Windows non partiva in GUI per assenza dei runtime Tcl/Tk nel bundle; packaging corretto e nuova dist ricompilata
-  - il site guard poteva entrare in cooldown troppo cieco dopo `interstitial_datadome`; ora il clear della challenge e piu severo e durante il cooldown e prevista una probe controllata
-  - su bundle Windows `idealista` poteva cadere da `msedge` a `chrome` e peggiorare il profilo DataDome; ora vengono preferiti i browser reali installati e il bundle auto-mode non forza piu `chromium`
-- lo stato live attuale e questo:
-  - `immobiliare` resta il sito piu stabile e continua a lavorare su `chrome`
-  - `idealista` preferisce `msedge` installato e dopo reset del site guard ha ripreso il ciclo corretto sulla VM
-  - sui blocked outcome piu sospetti e stato aggiunto un retry immediato con browser alternativo, senza trasformarlo in loop aggressivo
-  - la modalita `annunci privati` resta attiva e ora riapre meno dettagli grazie al riuso del DB locale
-- il problema dominante non e un hard block generalizzato, ma la tenuta di `idealista` nei run lunghi e la riduzione delle interazioni sospette:
-  - `idealista` puo ancora arrivare a `interstitial_datadome` o `partial_success_degraded`
-  - Playwright con browser reale installato migliora il comportamento, ma il browser puo risultare comunque "gestito" lato sito
-  - il secondo controllo `private_only` va tenuto il piu parsimonioso possibile
-- follow-up ormai gia integrati nella baseline locale:
-  - modalita `annunci privati` in GUI/runtime con filtro locale sugli annunci con agenzia rilevata
-  - hardening della log rotation Windows per evitare rumore e contention su `app.log`
-  - attesa piu prudente sul ramo `interstitial_datadome` quando la verifica si auto-risolve in headed mode
-  - lettura del nome agenzia dal logo `img[alt]` dentro i link `/pro/`
-  - secondo controllo pagina dettaglio in `private_only` solo per gli annunci Idealista senza segnale agenzia in card
-  - classificazione `Privato` / `Professionista` letta dal blocco "Persona che pubblica l'annuncio" e dal link profilo `/pro/`
-  - pacing del secondo controllo reso piu conservativo, con log dedicato agli `unresolved`
-  - riuso del DB per evitare di riaprire annunci gia noti durante il filtro `private_only`
+- la cartella resta `2.2_test`, ma oggi va trattata come preview branch della linea successiva.
+- `2.1_stable` resta la baseline shipping.
+- il ramo non e piu solo una copia con docs nuove:
+  - il motore live predefinito e ora `camoufox`
+  - GUI e CLI sono riallineate al default `camoufox`
+  - il servizio continuo `fetch-live-service` e il percorso operativo reale del ramo
+- la differenza rispetto alla baseline shipping e ora concreta:
+  - continuita di sessione per sito
+  - profili persistenti isolati per sito
+  - risk budget e stato di run
+  - orchestrazione 24/7 con runtime condiviso
 
-## Cosa c'e dentro
-- scraping live `fetch-live-once` per Idealista e Immobiliare
-- SQLite con deduplica e retention
-- notifiche Telegram ed Email
-- sender profile cifrati con DPAPI
-- GUI con setup email preset/custom, test connessione/invio, runtime controls e help
-- packaging Windows con `affitto_gui.exe` + `affitto_cli.exe`
-- hardening runtime per fault isolation notifiche
-- anti-block pragmatico e drift detection minima con artifact diagnostici
+## Decisione di progetto
+- `2.1_stable` resta il percorso shipping e supportabile
+- `2.2_test` serve come preview disciplinata di cambi che toccano sessione, lifecycle lungo e precisione live
+- il file `docs/risk_scoring_e_griglia_segnali_antibot.md` resta la pietra miliare interna della nuova linea
 
-## Decisioni confermate
-- `v1_stable` resta archivio storico, non base attiva
-- il workflow quotidiano riparte da questa root, non da `v2_test`
-- i file Codex da tenere qui sono solo quelli utili in forma slim
-- `chat_openclaw.md` e `chat_codex.md` non sono stati portati nella nuova base
+## Cosa e gia consolidato
+- telemetria minima, `RiskBudget`, `RunRiskState` e stop trigger leggibili nel fetch live
+- profili persistenti isolati per `site/channel`
+- ownership esplicita della sessione con chiave `site|channel|profile`
+- pool di sessioni isolate per owner con riuso same-site e pruning dello churn same-site
+- servizio continuo sopra il one-shot:
+  - cadenza da `runtime.cycle_minutes`
+  - no overlap
+  - `LiveServiceState`
+  - runtime disposition minima `keep / recycle_site_slot / recycle_runtime / stop_service`
+- GUI allineata al servizio reale:
+  - `Run Once` -> `fetch-live-once`
+  - periodico -> `fetch-live-service`
 
-## Percorsi utili
-- da sorgente:
-  - config, DB e log stanno in `runtime/`
-- da bundle:
-  - default `%LOCALAPPDATA%\\AffittoV2\\runtime`
-  - override `AFFITTO_V2_RUNTIME_DIR`
+## Pivot backend
+- backend browser operativo del ramo: `camoufox`
+- root profili persistenti predefinita: `runtime/camoufox-profile`
+- alias legacy `auto|firefox|chromium|chrome|msedge` mantenuti solo per compatibilita CLI e normalizzati a `camoufox`
+- launch predefinito Camoufox:
+  - `humanize=True`
+  - `locale=it-IT`
+  - `timezone=Europe/Rome`
+  - `screen=1920x1080`
+- setup Windows aggiornato per eseguire `python -m camoufox fetch`
+
+## Stato operativo visto in VM il 2026-03-26
+- file di riferimento: `docs/tmp_logs.md`
+- soak test lungo del servizio continuo osservato da `11:59:51` a `16:55:19`
+- cicli completati: `60`
+- esiti osservati:
+  - `healthy`: `240`
+  - `degraded`: `0`
+  - `blocked`: `0`
+  - `cooling`: `0`
+  - `assist_required`: `0`
+  - `ERROR`: `0`
+  - `Traceback`: `0`
+- il servizio resta `stable` per tutta la finestra osservata
+- `runtime disposition`:
+  - `keep`: `56`
+  - `recycle_site_slot`: `4`
+  - nessun `recycle_runtime`
+  - nessun `stop_service`
+
+## Fix piu recente gia chiuso
+- il collo di bottiglia piu evidente emerso dai log era il riuso nullo della memoria `private_only` per gli annunci professionali Idealista trovati dal detail-check
+- il ramo salva ora questa evidenza in una cache negativa dedicata nel DB
+- effetto atteso nel prossimo soak:
+  - `reused_professional > 0`
+  - riduzione o sparizione delle riaperture ripetute degli stessi `ad_id` professionali
+
+## Lettura tecnica del soak
+- `idealista` mostra continuita forte:
+  - un solo profilo persistente iniziale
+  - riuso same-site fino a `max_reuse_count=59`
+  - nessun segnale di degrado o cooldown nei log osservati
+- `immobiliare` lavora bene su `camoufox`, ma il ramo applica un recycle preventivo dello slot:
+  - trigger osservato: `slot_reuse_cap`
+  - soglia attuale in codice: `max_reuse_count=12`
+  - il recycle e locale al sito e non degrada il servizio
+- la distinzione locale vs globale del runtime sta quindi lavorando come previsto:
+  - il runtime condiviso viene preservato
+  - solo lo slot del sito caldo viene ricreato quando serve
+
+## Limite aperto piu concreto
+Il tema aperto non e oggi l'anti-bot del soak Camoufox, ma la precisione del filtro `private_only`.
+
+Nei log osservati:
+- il detail-check Idealista intercetta regolarmente annunci professionali
+- il filtro locale scarta molte agenzie
+- resta pero il warning costante:
+  - `guarantee_private_only=False`
+  - `allowed_without_agency_signal` tra `15` e `16` per ciclo osservato
+
+Tradotto:
+- la tenuta del motore e buona
+- la garanzia "solo privati" non e ancora forte
 
 ## File da leggere per ripartire
 - `README.md`
-- `docs/context/NEXT_STEPS.md`
-- `docs/context/2_1_STABLE_MANIFEST.md`
-- `docs/context/codex/REVIEW_2_1_STABLE.md`
+- `docs/risk_scoring_e_griglia_segnali_antibot.md`
+- `docs/context/STRATEGY_2_2_TEST.md`
+- `docs/context/STATE_MACHINE_2_2_TEST.md`
+- `docs/context/EXPERIMENT_PLAN_2_2_TEST.md`
+- `docs/context/STOP_TRIGGERS_2_2_TEST.md`
+- `docs/context/PROMOTION_GATE_2_2_TEST.md`
+- `docs/context/codex/ACTIVE_PATCH.md`
+- `docs/tmp_logs.md`
 
 ## Prossimo passo sensato
-- usare questa root come nuovo punto di partenza reale
-- ricreare ambiente virtuale, runtime e bundle localmente quando servono
-- aprire nuove patch solo dentro `2.1_stable`
-- repo GitHub privata gia creata e pushata da questa root (`FkManu/fk-rent-scraper`)
-- baseline VM attuale confermata come praticabile con Edge+Chrome installati
-- review log/DOM aggiornata al 2026-03-25:
-  - il loop percepito del site guard era in realta un cooldown ripetuto dopo `interstitial_datadome`, non un loop del fetcher
-  - il reset manuale sbloccava il ciclo perche puliva strikes/cooldown e permetteva a `idealista` di tornare su `msedge`
-  - i log piu recenti mostrano che `immobiliare` continua a girare anche quando `idealista` si degrada
-  - la strategia `private_only` e stata resa piu prudente: se l'annuncio e gia nel DB non viene riaperto solo per riclassificarlo
-- prossima chiusura operativa:
-  - validare su VM la nuova dist per alcune ore, controllando che non ricompaiano lunghe sequenze di solo `cooldown_active`
-  - misurare se dal secondo ciclo in poi calano davvero i `detail verification start` su `idealista` grazie alla cache DB
-  - decidere se il tema browser "gestito" va affrontato come patch a parte o accettato come limite pratico dell'automazione corrente
-  - fare pulizia finale pre-push della root `2.1_stable` ed eseguire l'update sulla repo GitHub privata
+- validare nel prossimo soak la nuova memoria `private_only`
+- mantenere il soak del `2026-03-26` come baseline comparativa della preview
+- chiarire se il recycle preventivo di `immobiliare`:
+  - e la soglia giusta
+  - va esteso ad altri siti
+  - va documentato come policy stabile del ramo
+- non aprire ancora CDP o nuove superfici UI finche questa base non resta leggibile e misurabile

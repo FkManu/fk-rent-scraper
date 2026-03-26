@@ -8,7 +8,7 @@ SRC = ROOT / "src"
 
 datas = []
 hiddenimports = []
-for package_name in ("playwright", "dotenv"):
+for package_name in ("camoufox", "playwright", "browserforge", "apify_fingerprint_datapoints", "language_tags", "dotenv"):
     datas += collect_data_files(package_name)
     hiddenimports += collect_submodules(package_name)
 

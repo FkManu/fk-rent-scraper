@@ -28,7 +28,7 @@ python run.py gui
 Azioni GUI aggiunte:
 - `Reset Site Guard`
 - `Reset DB Annunci` (cancella solo tabella `listings`, mantiene blacklist/pattern)
-- `Run Once` esegue automaticamente con bypass cooldown guard per test manuale
+- `Run Once` usa il percorso operativo reale del ramo, senza bypass automatici del cooldown
 - setup email semplice:
   - provider preset
   - mittente
@@ -89,12 +89,17 @@ Output atteso:
 - `dist\affitto_gui\affitto_gui.exe`
 - `dist\affitto_gui\affitto_cli.exe`
 
-Prerequisiti browser consigliati per Windows/VM:
-- `Microsoft Edge` installato
-- `Google Chrome` installato
-- motivo:
-  - alcuni siti reagiscono in modo diverso al browser automatizzato
-  - `auto` puo riordinare i candidati per sito solo se i browser reali esistono davvero sulla macchina
+Prerequisito browser consigliato per Windows/VM:
+- backend `Camoufox` gia fetchato sulla macchina
+- comando standard:
+
+```powershell
+.\.venv\Scripts\python.exe -m camoufox fetch
+```
+
+- note:
+  - la GUI e il companion CLI ora usano `camoufox` come default
+  - gli alias legacy del vecchio routing browser restano accettati solo per compatibilita CLI
 
 Smoke test bundle:
 1. imposta un runtime isolato con `AFFITTO_V2_RUNTIME_DIR`
@@ -107,6 +112,9 @@ Smoke test bundle:
 ```powershell
 .\dist\affitto_gui\affitto_cli.exe validate-config --config "$env:AFFITTO_V2_RUNTIME_DIR\app_config.json"
 ```
+
+Artefatto preview utile per consegna locale:
+- `dist\affitto_2_2_preview_bundle.zip`
 
 Note runtime bundle:
 - da sorgente resta `runtime`
@@ -285,30 +293,26 @@ python run.py fetch-live-once --headed --max-per-site 20 --notify-mode config
 Profilo persistente (consigliato):
 
 ```powershell
-python run.py fetch-live-once --headed --notify-mode config --profile-dir .\runtime\playwright-profile
+python run.py fetch-live-once --headed --notify-mode config --profile-dir .\runtime\camoufox-profile
 ```
 
-Canale browser locale (Chrome/Edge) per ridurre fingerprint da Chromium bundled:
+Backend esplicito Camoufox:
 
 ```powershell
-python run.py fetch-live-once --headed --notify-mode config --browser-channel msedge
+python run.py fetch-live-once --headed --notify-mode config --browser-channel camoufox
 ```
 
-Site guard completo (jitter + classificazione outcome + cooldown + rotazione canale):
+Site guard completo (jitter + classificazione outcome + cooldown):
 
 ```powershell
-python run.py fetch-live-once --headed --notify-mode both --send-real-notifications --browser-channel auto --channel-rotation-mode round_robin --guard-jitter-min-sec 2 --guard-jitter-max-sec 6 --guard-base-cooldown-min 30 --guard-max-cooldown-min 360
+python run.py fetch-live-once --headed --notify-mode both --send-real-notifications --browser-channel camoufox --channel-rotation-mode off --guard-jitter-min-sec 2 --guard-jitter-max-sec 6 --guard-base-cooldown-min 30 --guard-max-cooldown-min 360
 ```
 
-Nota canali:
-- auto-rotation preferisce `msedge`/`chrome`; `chromium` resta fallback.
-- con patch Observable Autohealing la priorita puo cambiare per sito:
-  - `idealista` tende a preferire `msedge`
-  - `immobiliare` tende a preferire `chrome`
-  - il guard ricorda ultimo canale valido e ultimo canale che ha prodotto block/interstitial
-- su PC/VM Windows conviene avere installati **sia Edge sia Chrome**:
-  - non come bypass
-  - ma per dare al sistema un fallback reale quando un sito reagisce peggio a un browser rispetto all'altro
+Nota backend:
+- `camoufox` e il backend operativo predefinito.
+- `auto|firefox|chromium|chrome|msedge` restano alias legacy e vengono normalizzati a `camoufox`.
+- `channel_rotation_mode` puo restare nei comandi legacy ma non fa piu parte del percorso standard raccomandato.
+- il launch predefinito usa fingerprint Windows con `locale=it-IT`, `timezone=Europe/Rome`, `humanize=True` e `screen` Camoufox vincolato a `1920x1080`, senza piu forzare una `window` fissa.
 
 Nota outcome:
 - il fetch live distingue ora `healthy`, `suspect`, `degraded`, `blocked`, `cooling`
@@ -365,13 +369,9 @@ Nota:
 - se la pagina e un blocco statico non interattivo (non captcha risolvibile), `pause_and_notify` non attende il timeout completo.
 - su pagine normali con script anti-bot nascosti non viene piu attivato il captcha solver (ridotti falsi positivi).
 - in `skip_and_notify` + `--headed`, se viene rilevata challenge verifica dispositivo/captcha, viene fatta una breve auto-attesa prima di classificare `blocked`.
-- in `auto` + `round_robin` il sistema puo riordinare in modo diverso i browser per sito:
-  - `idealista` tende a partire da `msedge`
-  - `immobiliare` tende a partire da `chrome`
 - un `200` con contenuto sospetto/vuoto non viene piu trattato automaticamente come successo.
 - retry automatico: massimo uno, solo su outcome transienti/sospetti marcati come retryable.
-- la patch non introduce retry aggressivi cross-browser sullo stesso URL:
-  - il riordino vale come memoria/priorita per le run e i siti successivi
+- la patch non introduce retry aggressivi cross-browser sullo stesso URL.
 - parse fail / drift non vengono scambiati automaticamente per hard block.
 - su fetch riuscite vengono ora loggate metriche minime di qualità:
   - cards
@@ -385,26 +385,25 @@ Invio reale notifiche:
 python run.py fetch-live-once --notify-mode both --send-real-notifications
 ```
 
-## 6-bis) Matrix pratica Edge/Chrome su VM
+## 6-bis) Matrix pratica Camoufox su VM
 
-Caso osservato in VM:
-- `idealista` spesso migliore con `msedge`
-- `immobiliare` puo mostrare `interstitial_datadome` con `msedge` ma comportarsi meglio con `chrome`
+Caso operativo attuale:
+- `Camoufox` e l'unico backend raccomandato nel ramo `2.2_test`
+- il focus della VM non e piu scegliere tra browser diversi, ma verificare continuita di sessione e profilo persistente
 
 Passi suggeriti:
-1. installare Edge e Chrome sulla VM
+1. eseguire il fetch di Camoufox sulla VM
 2. eseguire:
 
 ```powershell
-python run.py fetch-live-once --headed --notify-mode none --browser-channel auto --channel-rotation-mode round_robin --max-per-site 5 --save-live-debug
+python run.py fetch-live-once --headed --notify-mode none --browser-channel camoufox --channel-rotation-mode off --max-per-site 5 --save-live-debug
 ```
 
 3. verificare nei log:
-- `Site guard channel candidates. site=idealista ...`
-- `Site guard channel candidates. site=immobiliare ...`
-- `Fetch URL result. site=... channel=...`
+- `Using persistent Camoufox profile. site=...`
+- `Fetch URL result. site=... channel=camoufox`
 - eventuali `interstitial_datadome` o `hard_block_http_status`
 
 Esito atteso:
-- il supporto riesce a vedere quale canale e stato usato per sito
-- il guard state conserva ultimo canale valido e ultima famiglia di blocco rilevata
+- il supporto riesce a vedere che il backend attivo e `camoufox`
+- il guard state conserva ultimo backend valido e ultima famiglia di blocco rilevata

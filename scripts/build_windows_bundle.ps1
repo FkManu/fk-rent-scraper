@@ -15,6 +15,7 @@ $GuiSpec = Join-Path $Root "packaging\\affitto_gui.spec"
 $CliSpec = Join-Path $Root "packaging\\affitto_cli.spec"
 $CliExe = Join-Path $DistRoot "affitto_cli.exe"
 $CliTarget = Join-Path $GuiDist "affitto_cli.exe"
+$PreviewZip = Join-Path $DistRoot "affitto_2_2_preview_bundle.zip"
 
 Write-Host "Python:" $Python
 Write-Host "Root:" $Root
@@ -24,6 +25,9 @@ if (Test-Path $GuiDist) {
 }
 if (Test-Path $CliExe) {
     Remove-Item $CliExe -Force
+}
+if (Test-Path $PreviewZip) {
+    Remove-Item $PreviewZip -Force
 }
 if (Test-Path $BuildRoot) {
     Remove-Item $BuildRoot -Recurse -Force
@@ -53,8 +57,10 @@ if (-not (Test-Path $GuiDist)) {
 }
 
 Move-Item $CliExe $CliTarget -Force
+Compress-Archive -Path (Join-Path $GuiDist "*") -DestinationPath $PreviewZip -Force
 
 Write-Host ""
 Write-Host "Bundle pronto:" $GuiDist
 Write-Host "GUI exe:" (Join-Path $GuiDist "affitto_gui.exe")
 Write-Host "CLI companion:" $CliTarget
+Write-Host "Preview zip:" $PreviewZip

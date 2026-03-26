@@ -1,24 +1,29 @@
-# Codex Workflow - 2.1_stable
+# Codex Workflow - 2.2_test
 
-Workflow Codex ridotto all'essenziale per la baseline stabile.
+Workflow Codex ridotto all'essenziale per la preview.
 
-## File presenti
-- `HISTORY.md` -> storico sintetico delle patch che hanno portato a questa baseline
-- `REVIEW_2_1_STABLE.md` -> review finale utile della root pulita
-- `TASK_FIRST_RUN_RELIABILITY.md` -> task pronto per la prima patch della nuova fase
-- `TASK_OBSERVABLE_AUTOHEALING.md` -> task pronto per la seconda patch della nuova fase
+## Documenti vivi
 - `ACTIVE_PATCH.md` -> patch attiva corrente
-- `PROMPT_CURRENT.md` -> prompt corrente da dare a Codex
-- `OUTPUT_CURRENT.md` -> output corrente da salvare in repo
-- `REVIEW_CURRENT.md` -> review corrente della patch attiva
+- `PROMPT_CURRENT.md` -> prompt operativo corrente
+- `OUTPUT_CURRENT.md` -> stato tecnico corrente
+- `REVIEW_CURRENT.md` -> review sintetica della patch corrente
+- `HISTORY.md` -> storico breve della linea
+
+## Documenti reference
+- `REVIEW_2_1_STABLE.md` -> review utile della baseline di provenienza
+
+## Documenti archive
+- `TASK_2_2_TEST_SILENT_SESSION_STRATEGY.md`
+- `TASK_2_2_M0_FOUNDATION.md`
+- `TASK_FIRST_RUN_RELIABILITY.md`
+- `TASK_OBSERVABLE_AUTOHEALING.md`
+
+## Read first
+1. `../../risk_scoring_e_griglia_segnali_antibot.md`
+2. `../HANDOFF.md`
+3. `../NEXT_STEPS.md`
+4. `OUTPUT_CURRENT.md`
+5. `ACTIVE_PATCH.md`
 
 ## Regola pratica
-Questa root mantiene il workflow standard repo-first per la patch attiva.
-
-I task `TASK_*` sono documenti stabili di handoff.
-I file `*_CURRENT.md` rappresentano invece il ciclo di lavoro corrente con Codex.
-
-Quando una patch si chiude:
-- si aggiorna `HISTORY.md`
-- si aggiorna la review
-- poi si sovrascrivono i file `*_CURRENT.md` per la patch successiva
+I task della preview devono ridurre rumore, aumentare continuita o migliorare `private_only`.

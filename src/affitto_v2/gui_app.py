@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -58,6 +59,18 @@ def _default_gui_state_path(config_path: Path) -> Path:
 
 def _default_guard_state_path(config_path: Path) -> Path:
     return _runtime_dir_from_config(config_path) / "site_guard_state.json"
+
+
+def _default_service_stop_flag_path(config_path: Path) -> Path:
+    return _runtime_dir_from_config(config_path) / "live_service.stop"
+
+
+def _default_profile_dir_path(config_path: Path) -> Path:
+    return _runtime_dir_from_config(config_path) / "camoufox-profile"
+
+
+def _default_live_debug_dir_path(config_path: Path) -> Path:
+    return _runtime_dir_from_config(config_path) / "live_debug"
 
 
 def _app_root() -> Path:
@@ -247,7 +260,7 @@ def _reset_guard_state(path: Path, search_urls: list[str]) -> None:
                 "probe_after_utc": "",
                 "probe_attempts": 0,
             }
-    payload = {"version": 5, "last_channel": "chromium", "sites": sites}
+    payload = {"version": 6, "last_channel": "camoufox", "sites": sites}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -259,6 +272,9 @@ class AffittoGuiApp:
         self.profiles_path = profiles_path
         self.gui_state_path = _default_gui_state_path(config_path)
         self.guard_state_path = _default_guard_state_path(config_path)
+        self.service_stop_flag_path = _default_service_stop_flag_path(config_path)
+        self.profile_dir_path = _default_profile_dir_path(config_path)
+        self.live_debug_dir_path = _default_live_debug_dir_path(config_path)
         self.app_root = _app_root()
         self.bundle_mode = is_frozen_bundle()
         self.cli_exe = _cli_executable_path()
@@ -599,6 +615,13 @@ class AffittoGuiApp:
         ttk.Spinbox(frame, from_=5, to=180, textvariable=self.cycle_minutes_var, width=10).grid(
             row=0, column=1, sticky="w", padx=8, pady=6
         )
+        ttk.Label(
+            frame,
+            text="Questo valore viene salvato in config e usato dal servizio continuo come cadenza target.",
+            foreground="#2f4f4f",
+            wraplength=420,
+            justify=tk.LEFT,
+        ).grid(row=0, column=2, sticky="w", padx=(0, 8), pady=6)
         ttk.Label(frame, text="Annunci max per sito (max 50)").grid(row=1, column=0, sticky="w", padx=8, pady=6)
         ttk.Spinbox(frame, from_=5, to=50, textvariable=self.max_per_site_var, width=10).grid(
             row=1, column=1, sticky="w", padx=8, pady=6
@@ -627,7 +650,7 @@ class AffittoGuiApp:
         ttk.Label(
             frame,
             text=(
-                "Impostazioni fisse di stabilita: browser=auto(round_robin), "
+                "Impostazioni fisse di stabilita: backend browser=camoufox, "
                 "captcha_mode=skip_and_notify, site_guard=ON, headed=ON."
             ),
             foreground="#2f4f4f",
@@ -672,7 +695,7 @@ class AffittoGuiApp:
         ttk.Button(frame, text="Run Once (reale)", command=self._run_once).grid(
             row=2, column=0, sticky="ew", padx=8, pady=6
         )
-        self.start_btn = ttk.Button(frame, text="Start Ciclo Automatico", command=self._start_periodic)
+        self.start_btn = ttk.Button(frame, text="Start Servizio Continuo", command=self._start_periodic)
         self.start_btn.grid(row=3, column=0, sticky="ew", padx=8, pady=6)
         self.stop_btn = ttk.Button(frame, text="Stop", command=self._stop_running, state=tk.DISABLED)
         self.stop_btn.grid(row=4, column=0, sticky="ew", padx=8, pady=6)
@@ -682,12 +705,15 @@ class AffittoGuiApp:
         ttk.Button(frame, text="Reset DB Annunci", command=self._reset_listings_db).grid(
             row=6, column=0, sticky="ew", padx=8, pady=6
         )
-        ttk.Separator(frame).grid(row=7, column=0, sticky="ew", padx=8, pady=(8, 6))
+        ttk.Button(frame, text="Reset Profili/Debug Runtime", command=self._reset_runtime_privacy_state).grid(
+            row=7, column=0, sticky="ew", padx=8, pady=6
+        )
+        ttk.Separator(frame).grid(row=8, column=0, sticky="ew", padx=8, pady=(8, 6))
         ttk.Checkbutton(frame, text="Avvio automatico GUI (Windows)", variable=self.autostart_var).grid(
-            row=8, column=0, sticky="w", padx=8, pady=(4, 2)
+            row=9, column=0, sticky="w", padx=8, pady=(4, 2)
         )
         ttk.Button(frame, text="Applica Avvio Automatico", command=self._apply_autostart).grid(
-            row=9, column=0, sticky="ew", padx=8, pady=(2, 8)
+            row=10, column=0, sticky="ew", padx=8, pady=(2, 8)
         )
         return frame
 
@@ -696,13 +722,13 @@ class AffittoGuiApp:
         info = (
             "Panoramica rapida\n"
             "1) Incolla gli URL di ricerca.\n"
-            "2) Scegli i canali da usare.\n"
+            "2) Verifica il setup notifiche: il backend browser e Camoufox di default.\n"
             "3) Configura Telegram e/o Email.\n"
             "4) Premi Salva Configurazione.\n"
             "5) Esegui i test.\n"
             "6) Usa Run Once.\n"
             "7) Controlla i Log.\n"
-            "8) Solo dopo attiva il ciclo automatico.\n\n"
+            "8) Solo dopo attiva il servizio continuo.\n\n"
             "Telegram\n"
             "- Token: crea il bot da @BotFather con /newbot.\n"
             "- Chat ID: scrivi al bot o aggiungilo al canale/gruppo, poi usa getUpdates.\n"
@@ -719,16 +745,24 @@ class AffittoGuiApp:
             "Percorsi\n"
             "- Da sorgente: config, DB e log stanno in runtime/.\n"
             "- Da bundle: il runtime sta di default in %LOCALAPPDATA%/AffittoV2/runtime.\n"
+            "- I profili persistenti del browser stanno in runtime/camoufox-profile.\n"
             "- Se serve isolarlo per test, usa la variabile AFFITTO_V2_RUNTIME_DIR.\n\n"
             "Run Once\n"
             "- Fa un solo ciclo completo di fetch, deduplica e notifiche.\n"
-            "- Serve per verificare il setup prima del ciclo automatico.\n\n"
+            "- Serve per verificare il setup prima del servizio continuo.\n"
+            "- Rispetta il site guard e il cooldown del ramo: non forza bypass automatici.\n\n"
             "First run / warmup\n"
             "- Su runtime o VM nuovi il primo contatto con Idealista puo entrare in warmup.\n"
             "- Se il primo Run Once segnala suspect o blocked, ripeti una volta e controlla i log prima di usare Reset Site Guard.\n\n"
-            "Ciclo automatico\n"
+            "Servizio continuo\n"
             "- Attivalo solo dopo test OK e un Run Once pulito.\n"
+            "- La GUI salva `cycle_minutes` in configurazione e il servizio usa quel valore come cadenza target.\n"
+            "- Il pulsante Stop chiede ora una chiusura pulita del servizio: attende la fine del ciclo invece di troncare subito il runtime.\n"
+            "- La dist salva artifact live debug del servizio per analizzare i blocchi; gli artifact vecchi vengono potati automaticamente.\n"
             "- Usa intervalli realistici: minimo 5 minuti, meglio 10-15 se stai ancora tarando il setup.\n\n"
+            "Privacy / reset runtime\n"
+            "- `Reset Profili/Debug Runtime` elimina profili browser persistenti e artifact debug salvati.\n"
+            "- Usalo quando vuoi ripulire lo stato locale della VM senza toccare il DB annunci.\n\n"
             "Blacklist\n"
             "- Esclude gli annunci dell'agenzia quando il nome corrisponde.\n"
             "- Inserisci solo il nome dell'agenzia: la GUI costruisce la regex.\n"
@@ -1441,19 +1475,25 @@ class AffittoGuiApp:
             return [str(launcher), *args]
         return [str(sys.executable), str(self.run_py), *args]
 
-    def _build_fetch_command(self, send_real_notifications: bool, guard_ignore_cooldown: bool = False) -> list[str]:
+    def _build_fetch_command(
+        self,
+        *,
+        command: str,
+        send_real_notifications: bool,
+        guard_ignore_cooldown: bool = False,
+    ) -> list[str]:
         mode = self.notify_mode_var.get().strip().lower()
         if mode not in _NOTIFY_MODES:
             mode = "both"
         cmd = self._cli_command(
-            "fetch-live-once",
+            command,
             "--headed",
             "--notify-mode",
             mode,
             "--browser-channel",
-            "auto",
+            "camoufox",
             "--channel-rotation-mode",
-            "round_robin",
+            "off",
             "--max-per-site",
             str(int(self.max_per_site_var.get())),
             "--captcha-wait-sec",
@@ -1475,13 +1515,26 @@ class AffittoGuiApp:
             cmd.append("--send-real-notifications")
         if guard_ignore_cooldown:
             cmd.append("--guard-ignore-cooldown")
+        if command == "fetch-live-service":
+            cmd.extend(["--save-live-debug", "--live-debug-dir", str(self.live_debug_dir_path)])
+            cmd.extend(["--service-stop-flag", str(self.service_stop_flag_path)])
         return cmd
 
-    def _run_fetch_process(self, send_real_notifications: bool, guard_ignore_cooldown: bool = False) -> int:
+    def _run_fetch_process(
+        self,
+        *,
+        command: str,
+        send_real_notifications: bool,
+        guard_ignore_cooldown: bool = False,
+        graceful_stop_file: Path | None = None,
+    ) -> int:
         cmd = self._build_fetch_command(
+            command=command,
             send_real_notifications=send_real_notifications,
             guard_ignore_cooldown=guard_ignore_cooldown,
         )
+        if graceful_stop_file is not None and graceful_stop_file.exists():
+            graceful_stop_file.unlink()
         self._enqueue("log", f"$ {' '.join(cmd)}")
         proc = subprocess.Popen(
             cmd,
@@ -1494,24 +1547,51 @@ class AffittoGuiApp:
         with self._process_lock:
             self._active_proc = proc
         assert proc.stdout is not None
+        graceful_stop_requested = False
+        graceful_deadline = 0.0
         for line in proc.stdout:
             self._enqueue("log", line.rstrip("\r\n"))
             if self._stop_event.is_set():
-                break
+                if graceful_stop_file is None:
+                    break
+                if not graceful_stop_requested:
+                    graceful_stop_requested = True
+                    graceful_deadline = time.monotonic() + 90.0
+                    self._enqueue("status", "Stop servizio richiesto: attendo fine ciclo e chiusura pulita...")
+                if proc.poll() is not None:
+                    break
+                if time.monotonic() >= graceful_deadline:
+                    break
         if self._stop_event.is_set() and proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=6)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+            if graceful_stop_file is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=6)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+            else:
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=6)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
         code = proc.wait()
         with self._process_lock:
             self._active_proc = None
+        if graceful_stop_file is not None and graceful_stop_file.exists():
+            graceful_stop_file.unlink()
         return code
 
     def _run_once_worker(self) -> None:
         self._enqueue("status", "Run once in esecuzione...")
-        code = self._run_fetch_process(send_real_notifications=True, guard_ignore_cooldown=True)
+        code = self._run_fetch_process(
+            command="fetch-live-once",
+            send_real_notifications=True,
+            guard_ignore_cooldown=False,
+        )
         if code == 0:
             self._enqueue("status", "Run once completata.")
         else:
@@ -1531,21 +1611,20 @@ class AffittoGuiApp:
         self._worker.start()
 
     def _periodic_worker(self) -> None:
-        self._enqueue("status", "Ciclo automatico avviato.")
-        while not self._stop_event.is_set():
-            code = self._run_fetch_process(send_real_notifications=True, guard_ignore_cooldown=False)
-            if code != 0:
-                self._enqueue("log", f"[WARN] Run ciclo terminata con code={code}.")
-            if self._stop_event.is_set():
-                break
-            wait_minutes = int(self.cycle_minutes_var.get())
-            wait_sec = max(5, wait_minutes * 60)
-            self._enqueue("status", f"In attesa del prossimo ciclo ({wait_minutes} min).")
-            end_ts = time.time() + wait_sec
-            while time.time() < end_ts:
-                if self._stop_event.wait(timeout=1):
-                    break
-        self._enqueue("status", "Ciclo automatico fermato.")
+        wait_minutes = int(self.cycle_minutes_var.get())
+        self._enqueue("status", f"Servizio continuo avviato (cadenza target {wait_minutes} min).")
+        code = self._run_fetch_process(
+            command="fetch-live-service",
+            send_real_notifications=True,
+            guard_ignore_cooldown=False,
+            graceful_stop_file=self.service_stop_flag_path,
+        )
+        if self._stop_event.is_set():
+            self._enqueue("status", "Servizio continuo fermato.")
+        elif code == 0:
+            self._enqueue("status", "Servizio continuo terminato.")
+        else:
+            self._enqueue("status", f"Servizio continuo terminato con errore (code={code}).")
         self._enqueue("done", "periodic")
 
     def _start_periodic(self) -> None:
@@ -1566,11 +1645,24 @@ class AffittoGuiApp:
         with self._process_lock:
             proc = self._active_proc
         if proc is not None and proc.poll() is None:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
-        self.status_var.set("Richiesto stop ciclo/run.")
+            if self._periodic_mode:
+                try:
+                    self.service_stop_flag_path.parent.mkdir(parents=True, exist_ok=True)
+                    self.service_stop_flag_path.write_text("stop\n", encoding="utf-8")
+                except Exception:
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+            else:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+        if self._periodic_mode:
+            self.status_var.set("Richiesto stop servizio continuo: attendo fine ciclo.")
+        else:
+            self.status_var.set("Richiesto stop run.")
 
     def _reset_guard(self) -> None:
         try:
@@ -1603,6 +1695,42 @@ class AffittoGuiApp:
             self._enqueue("log", f"[INFO] DB listings reset. path={db_path} removed={removed}")
         except Exception as exc:
             messagebox.showerror("Reset DB", str(exc))
+
+    def _reset_runtime_privacy_state(self) -> None:
+        if self._worker is not None and self._worker.is_alive():
+            messagebox.showwarning("Reset Runtime", "Ferma prima un run/ciclo attivo.")
+            return
+        confirm = messagebox.askyesno(
+            "Reset Runtime",
+            "Eliminare i profili browser persistenti, lo stato del site guard e gli artifact debug?\n"
+            "Questo resetta la continuita locale delle sessioni e cancella gli artifact salvati.",
+        )
+        if not confirm:
+            return
+        targets = [
+            ("profili", self.profile_dir_path),
+            ("site_guard", self.guard_state_path),
+            ("debug", self.live_debug_dir_path),
+            ("service_stop_flag", self.service_stop_flag_path),
+        ]
+        removed: list[str] = []
+        for label, path in targets:
+            try:
+                if path.exists():
+                    if path.is_dir():
+                        shutil.rmtree(path)
+                    else:
+                        path.unlink()
+                    removed.append(f"{label}={path}")
+            except Exception as exc:
+                messagebox.showerror("Reset Runtime", f"Impossibile rimuovere {path}: {exc}")
+                return
+        if not removed:
+            self.status_var.set("Nessun profilo/debug persistente da rimuovere.")
+            self._enqueue("log", "[INFO] Nessun runtime artifact persistente da rimuovere.")
+            return
+        self.status_var.set("Profili, site guard e artifact debug runtime rimossi.")
+        self._enqueue("log", f"[INFO] Runtime privacy reset: {', '.join(removed)}")
 
     def _start_email_test(self, *, dry_run: bool) -> None:
         if self._worker is not None and self._worker.is_alive():

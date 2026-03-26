@@ -1,5 +1,6 @@
 param(
-    [switch]$SkipPlaywright
+    [Alias("SkipPlaywright")]
+    [switch]$SkipCamoufoxFetch
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,9 +22,9 @@ Write-Host "[setup] Upgrading pip..."
 Write-Host "[setup] Installing requirements..."
 & $venvPython -m pip install -r requirements.txt
 
-if (-not $SkipPlaywright) {
-    Write-Host "[setup] Installing Playwright Chromium..."
-    & $venvPython -m playwright install chromium
+if (-not $SkipCamoufoxFetch) {
+    Write-Host "[setup] Fetching Camoufox browser..."
+    & $venvPython -m camoufox fetch
 }
 
 Write-Host "[setup] Done."
