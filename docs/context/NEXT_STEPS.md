@@ -2,13 +2,14 @@
 
 ## Punto di partenza
 Questa root `2.2_test` non e piu una foundation embrionale.
-Va trattata come preview in hardening.
+Va trattata come linea `2.2 stable` ancora in hardening operativo.
 
 Oggi il ramo ha gia:
 - backend operativo predefinito `camoufox`
 - GUI e CLI allineate allo stesso backend
 - servizio continuo reale sopra `fetch-live-once`
 - soak VM lungo del `2026-03-26` con esito molto pulito
+- fix del `2026-03-27` sul cooldown artificiale `idealista` da `detail_touch_count`
 
 Per ricostruire il contesto minimo leggere prima:
 1. `docs/risk_scoring_e_griglia_segnali_antibot.md`
@@ -30,10 +31,11 @@ Per ricostruire il contesto minimo leggere prima:
    - mantenere la distinzione tra:
      - filtro URL lato sito
      - filtro hard locale del parser/pipeline
-2. Session model reset:
+2. Guard readability / session model:
    - consolidare l'ownership di browser/context/page sul lifecycle lungo
    - mantenere `cross_site_session_reuse_count` a zero salvo decisione esplicita contraria
    - introdurre una lettura piu chiara del perche uno slot venga riciclato
+   - distinguere meglio `unexpected_error` dai blocchi sito veri
    - decidere se il recycle preventivo same-site debba restare solo su `immobiliare` o diventare policy piu generale
 3. Orchestrazione 24/7:
    - promuovere il soak del `2026-03-26` a baseline comparativa del ramo
@@ -47,7 +49,7 @@ Per ricostruire il contesto minimo leggere prima:
    - mantenere niente retry cross-browser immediato di default
    - preservare il budget basso di identita
    - non allargare i budget solo per inseguire qualche listing in piu
-5. Preview release hygiene:
+5. Stable release hygiene:
    - mantenere ordinati i markdown vivi di contesto
    - evitare duplicazioni tra `README`, `HANDOFF`, `NEXT_STEPS` e `codex/OUTPUT_CURRENT`
    - trattare `dist/` come artefatto build locale, non come contenuto repo
@@ -59,7 +61,7 @@ Per ricostruire il contesto minimo leggere prima:
 ## Cose da evitare
 - non usare `2.2_test` per bugfix generici della baseline shipping
 - non riaprire subito la discussione multi-browser: nel ramo oggi il backend reale e `camoufox`
-- non promuovere a "problema motore" una questione che oggi sembra soprattutto di precisione `private_only`
+- non promuovere a "problema motore" una questione che oggi sembra soprattutto di precisione `private_only` o di errore interno
 - non fare patchone che mischia parser, packaging e session strategy
 - non committare log, runtime, build temporanei o dump locali
 

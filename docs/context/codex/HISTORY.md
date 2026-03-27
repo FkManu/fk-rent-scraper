@@ -100,3 +100,16 @@
   - il detail-check salva ora i professionali trovati anche se vengono scartati dalla pipeline `private_only`
   - il riuso DB `private_only` puo quindi evitare riaperture ripetute dello stesso annuncio professionale nei cicli successivi
   - copertura aggiornata con test mirati sul salvataggio e sul riuso della memoria professionale
+- fix del `2026-03-27` su `idealista` / `detail_touch_count`:
+  - root cause emersa dai log lunghi: `_verify_idealista_private_only_candidates()` poteva restituire `None`
+  - il chiamante aggregava `detail_touch_count` come intero e generava `unsupported operand type(s) for +=: 'int' and 'NoneType'`
+  - l'errore veniva poi classificato dal guard come `unexpected_error`, producendo cooldown artificiale su `idealista`
+  - fix applicato:
+    - early return a `0` quando non ci sono candidati
+    - coercizione osservabile del `detail_touch_count` nel chiamante
+    - test di regressione sul ramo `no candidates`
+    - test del helper di coercizione
+- promozione del `2026-03-27`:
+  - riallineati i doc vivi da `preview` a `2.2 stable`
+  - bundle Windows rinominato come stable
+  - release GitHub `v2.2` destinata a sostituire la vecchia prerelease preview

@@ -1,4 +1,4 @@
-# Windows packaging - primo `.exe` stabile
+# Windows packaging - `2.2 stable`
 
 ## Strategia scelta
 
@@ -67,11 +67,11 @@ Output atteso:
 
 - `dist\affitto_gui\affitto_gui.exe`
 - `dist\affitto_gui\affitto_cli.exe`
-- `dist\affitto_2_2_preview_bundle.zip`
+- `dist\affitto_2_2_stable_bundle.zip`
 
-Nota preview:
+Nota stable:
 - la dist resta un artefatto locale di build e non va committata in repo
-- lo zip preview serve come consegna locale o upload esterno, non come contenuto Git
+- lo zip stable serve come consegna locale o asset release, non come contenuto Git
 
 I file PyInstaller usati sono:
 
@@ -101,10 +101,10 @@ $env:AFFITTO_V2_RUNTIME_DIR = "$env:TEMP\\affitto-bundle-runtime"
 .\dist\affitto_gui\affitto_cli.exe validate-config --config "$env:AFFITTO_V2_RUNTIME_DIR\\app_config.json"
 ```
 
-Per distribuire la build preview:
+Per distribuire la build stable:
 
 ```powershell
-Expand-Archive -Path .\dist\affitto_2_2_preview_bundle.zip -DestinationPath "$env:TEMP\\affitto-preview"
+Expand-Archive -Path .\dist\affitto_2_2_stable_bundle.zip -DestinationPath "$env:TEMP\\affitto-stable"
 ```
 
 ## Stato verificato nella fase corrente

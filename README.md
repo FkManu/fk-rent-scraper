@@ -1,11 +1,11 @@
-# Affitto 2.2 Preview
+# Affitto 2.2 Stable
 
-La cartella resta `2.2_test`, ma ormai va trattata come preview branch della prossima linea live.
+La cartella resta `2.2_test`, ma a questo punto va trattata come root di lavoro della release `2.2 stable`.
 
-Non e la baseline shipping.
-La baseline shipping resta `2.1_stable`.
+Non e la baseline storica `2.1_stable`.
+`2.1_stable` resta la baseline di provenienza; `2.2_test` contiene la linea che e stata promossa a `2.2 stable`.
 
-Questa preview esiste per validare:
+Questa linea esiste per consolidare:
 - `camoufox` come backend operativo del ramo
 - continuita di sessione per sito
 - servizio continuo `fetch-live-service`
@@ -18,6 +18,7 @@ Questa preview esiste per validare:
 - servizio continuo reale sopra il one-shot
 - soak VM del `2026-03-26` stabile
 - fix recente sulla memoria negativa `private_only` per i professionali scoperti da detail-check
+- fix del `2026-03-27` sul conteggio `detail_touch_count` di `idealista`, che evitava cooldown artificiali da errore interno
 
 ## Read this first
 1. `docs/context/README.md`
@@ -57,7 +58,7 @@ python run.py doctor
 I file runtime locali vengono creati sotto `runtime/` e non fanno parte della repo.
 
 ## Browser default
-Il backend live predefinito della preview e `camoufox`.
+Il backend live predefinito della linea `2.2 stable` e `camoufox`.
 
 Note operative:
 - root profili persistenti di default: `runtime/camoufox-profile`
@@ -92,7 +93,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup_test_env.ps1 -SkipCamou
 
 Lo script standard esegue `python -m camoufox fetch`.
 
-## Windows preview bundle
+## Windows stable bundle
 Build del bundle:
 
 ```powershell
@@ -100,7 +101,7 @@ Build del bundle:
 powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_bundle.ps1
 ```
 
-Il bundle preview mantiene:
+Il bundle stable mantiene:
 - GUI -> default `camoufox`
 - CLI companion -> default `camoufox`
 - runtime bundle-aware -> `%LOCALAPPDATA%\AffittoV2\runtime`

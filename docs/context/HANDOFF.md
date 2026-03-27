@@ -1,8 +1,8 @@
 # HANDOFF.md
 
 ## Stato attuale
-- la cartella resta `2.2_test`, ma oggi va trattata come preview branch della linea successiva.
-- `2.1_stable` resta la baseline shipping.
+- la cartella resta `2.2_test`, ma oggi rappresenta la linea `2.2 stable`.
+- `2.1_stable` resta la baseline storica di provenienza.
 - il ramo non e piu solo una copia con docs nuove:
   - il motore live predefinito e ora `camoufox`
   - GUI e CLI sono riallineate al default `camoufox`
@@ -14,8 +14,9 @@
   - orchestrazione 24/7 con runtime condiviso
 
 ## Decisione di progetto
-- `2.1_stable` resta il percorso shipping e supportabile
-- `2.2_test` serve come preview disciplinata di cambi che toccano sessione, lifecycle lungo e precisione live
+- `2.2 stable` e la release corrente della nuova linea
+- `2.1_stable` resta il riferimento storico e comparativo
+- `2.2_test` resta la root tecnica in cui vivono sessione lunga, lifecycle continuo e precisione live
 - il file `docs/risk_scoring_e_griglia_segnali_antibot.md` resta la pietra miliare interna della nuova linea
 
 ## Cosa e gia consolidato
@@ -62,12 +63,17 @@
   - nessun `recycle_runtime`
   - nessun `stop_service`
 
-## Fix piu recente gia chiuso
+## Fix recenti gia chiusi
 - il collo di bottiglia piu evidente emerso dai log era il riuso nullo della memoria `private_only` per gli annunci professionali Idealista trovati dal detail-check
 - il ramo salva ora questa evidenza in una cache negativa dedicata nel DB
-- effetto atteso nel prossimo soak:
-  - `reused_professional > 0`
-  - riduzione o sparizione delle riaperture ripetute degli stessi `ad_id` professionali
+- nel review passata sulle ultime ore e emerso anche un bug interno, non un crash motore:
+  - `_verify_idealista_private_only_candidates()` poteva restituire `None`
+  - il chiamante aggregava `detail_touch_count` come intero
+  - il risultato era `unexpected_error` con cooldown artificiale su `idealista`
+- il fix del `2026-03-27` chiude questo punto:
+  - early return a `0`
+  - coercizione osservabile del `detail_touch_count` nel chiamante
+  - test mirati aggiunti
 
 ## Lettura tecnica del soak
 - `idealista` mostra continuita forte:
@@ -83,7 +89,7 @@
   - solo lo slot del sito caldo viene ricreato quando serve
 
 ## Limite aperto piu concreto
-Il tema aperto non e oggi l'anti-bot del soak Camoufox, ma la precisione del filtro `private_only`.
+Il tema aperto non e oggi la tenuta di `camoufox`, ma la precisione del filtro `private_only` e la distinzione tra errore interno e blocco sito reale.
 
 Nei log osservati:
 - il detail-check Idealista intercetta regolarmente annunci professionali
@@ -95,6 +101,7 @@ Nei log osservati:
 Tradotto:
 - la tenuta del motore e buona
 - la garanzia "solo privati" non e ancora forte
+- il guard va reso piu leggibile quando il degrado nasce dal codice, non dal sito
 
 ## File da leggere per ripartire
 - `README.md`
@@ -109,9 +116,10 @@ Tradotto:
 
 ## Prossimo passo sensato
 - validare nel prossimo soak la nuova memoria `private_only`
-- mantenere il soak del `2026-03-26` come baseline comparativa della preview
+- confermare che spariscano gli `unexpected_error` Idealista legati al vecchio `detail_touch_count`
+- mantenere il soak del `2026-03-26` come baseline comparativa della linea `2.2`
 - chiarire se il recycle preventivo di `immobiliare`:
   - e la soglia giusta
   - va esteso ad altri siti
   - va documentato come policy stabile del ramo
-- non aprire ancora CDP o nuove superfici UI finche questa base non resta leggibile e misurabile
+- separare nel guard gli errori interni dai veri segnali di blocco prima di aprire superfici piu avanzate

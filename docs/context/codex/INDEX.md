@@ -1,6 +1,6 @@
 # Codex Workflow - 2.2_test
 
-Workflow Codex ridotto all'essenziale per la preview.
+Workflow Codex ridotto all'essenziale per la linea `2.2 stable`.
 
 ## Documenti vivi
 - `ACTIVE_PATCH.md` -> patch attiva corrente
@@ -26,4 +26,4 @@ Workflow Codex ridotto all'essenziale per la preview.
 5. `ACTIVE_PATCH.md`
 
 ## Regola pratica
-I task della preview devono ridurre rumore, aumentare continuita o migliorare `private_only`.
+I task della linea devono ridurre rumore, aumentare continuita o migliorare `private_only`.

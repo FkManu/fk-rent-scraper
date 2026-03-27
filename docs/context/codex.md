@@ -1,7 +1,7 @@
 # codex.md
 
 ## Contesto sintetico
-`2.2_test` e la preview disciplinata della prossima linea live.
+`2.2_test` e la root tecnica della linea `2.2 stable`.
 
 Il focus non e inseguire fix casuali, ma consolidare:
 - `camoufox` come backend operativo

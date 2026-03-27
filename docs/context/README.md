@@ -1,6 +1,6 @@
 # Context Docs
 
-Questa cartella contiene il contesto operativo della preview `2.2_test`.
+Questa cartella contiene il contesto operativo della linea `2.2` oggi pubblicata come stable, pur restando nella root `2.2_test`.
 
 ## Documenti vivi
 - `HANDOFF.md` -> snapshot rapido dello stato reale del ramo
@@ -40,5 +40,7 @@ Questa cartella contiene il contesto operativo della preview `2.2_test`.
 8. `PROMOTION_GATE_2_2_TEST.md`
 
 ## Nota pratica
-`2.1_stable` resta la baseline shipping.
-`2.2_test` va trattata come preview disciplinata della linea successiva.
+- `2.1_stable` resta la baseline storica di provenienza.
+- `2.2_test` resta il nome della root locale.
+- la release corrente da considerare shipping per questa linea e `2.2 stable`.
+- i file `TASK_*.md`, i manifest `*_TEST` e i documenti di strategia restano reference; lo stato vivo passa dai file elencati sopra.

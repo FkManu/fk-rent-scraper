@@ -1,13 +1,13 @@
 # ACTIVE_PATCH.md
 
 ## Patch corrente
-Preview hardening:
-- memoria negativa `private_only`
-- riallineamento docs vive
-- packaging e dist coerenti con il ramo `camoufox`
+Stable release alignment:
+- chiusura dei fix `idealista` e `private_only`
+- riallineamento docs vive e memoria agente
+- packaging e release coerenti con `2.2 stable`
 
 ## Obiettivo
-Chiudere il primo stato davvero condivisibile della preview `2.2_test`.
+Chiudere lo stato pubblicabile di `2.2 stable` senza trascinare ambiguita da preview.
 
 ## Contesto
 - `2.2_test` deriva da `2.1_stable`, ma oggi e gia divergente nel motore live
@@ -15,10 +15,10 @@ Chiudere il primo stato davvero condivisibile della preview `2.2_test`.
 - il collo di bottiglia piu evidente emerso dai log e la precisione `private_only`, non la stabilita del motore
 
 ## Scope
-- memoria negativa dedicata per gli annunci professionali rilevati dal detail-check
 - riallineamento dei markdown di contesto allo stato reale del ramo
-- build della nuova dist preview
-- preparazione del changeset repo senza file temporanei
+- aggiornamento memoria sessione agente
+- build della nuova dist stable
+- sostituzione della vecchia release preview con release stable
 
 ## Non-scope
 - niente CDP
@@ -38,7 +38,7 @@ Chiudere il primo stato davvero condivisibile della preview `2.2_test`.
 - `packaging/*.spec`
 
 ## Done quando
-- i log non riaprono piu all'infinito gli stessi professionali Idealista gia classificati
-- i doc vivi non raccontano piu una milestone vecchia
-- la dist preview viene ricostruita con le modifiche correnti
-- il changeset finale e pushabile senza artefatti locali
+- i doc vivi non raccontano piu una milestone preview
+- la memoria agente riflette i fix del `2026-03-27`
+- la dist stable viene ricostruita con le modifiche correnti
+- la vecchia prerelease `v2.2 Preview` viene rimossa e sostituita da `v2.2 stable`
