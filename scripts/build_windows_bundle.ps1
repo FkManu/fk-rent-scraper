@@ -16,7 +16,9 @@ $CliSpec = Join-Path $Root "packaging\\affitto_cli.spec"
 $CliExe = Join-Path $DistRoot "affitto_cli.exe"
 $CliTarget = Join-Path $GuiDist "affitto_cli.exe"
 $LegacyPreviewZip = Join-Path $DistRoot "affitto_2_2_preview_bundle.zip"
-$StableZip = Join-Path $DistRoot "affitto_2_2_stable_bundle.zip"
+$LegacyStableZip = Join-Path $DistRoot "affitto_2_2_stable_bundle.zip"
+$StableZip = Join-Path $DistRoot "affitto_2_2_1_stable_bundle.zip"
+$ZipTarget = $StableZip
 
 Write-Host "Python:" $Python
 Write-Host "Root:" $Root
@@ -28,10 +30,20 @@ if (Test-Path $CliExe) {
     Remove-Item $CliExe -Force
 }
 if (Test-Path $StableZip) {
-    Remove-Item $StableZip -Force
+    try {
+        Remove-Item $StableZip -Force
+    }
+    catch {
+        $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+        $ZipTarget = Join-Path $DistRoot ("affitto_2_2_stable_bundle_" + $stamp + ".zip")
+        Write-Warning "Stable zip locked, fallback target: $ZipTarget"
+    }
 }
 if (Test-Path $LegacyPreviewZip) {
     Remove-Item $LegacyPreviewZip -Force
+}
+if (Test-Path $LegacyStableZip) {
+    Remove-Item $LegacyStableZip -Force
 }
 if (Test-Path $BuildRoot) {
     Remove-Item $BuildRoot -Recurse -Force
@@ -53,18 +65,34 @@ finally {
     Pop-Location
 }
 
-if (-not (Test-Path $CliExe)) {
-    throw "Companion CLI build missing: $CliExe"
-}
 if (-not (Test-Path $GuiDist)) {
     throw "GUI dist folder missing: $GuiDist"
 }
 
-Move-Item $CliExe $CliTarget -Force
-Compress-Archive -Path (Join-Path $GuiDist "*") -DestinationPath $StableZip -Force
+$CliExeItem = Get-ChildItem -Path $DistRoot -Recurse -Filter "affitto_cli.exe" -File -ErrorAction SilentlyContinue |
+    Sort-Object FullName |
+    Select-Object -First 1
+if ($null -eq $CliExeItem) {
+    throw "Companion CLI build missing under dist: $DistRoot"
+}
+if (Test-Path $CliTarget) {
+    Remove-Item $CliTarget -Force
+}
+Copy-Item $CliExeItem.FullName $CliTarget -Force
+if (-not (Test-Path $CliTarget)) {
+    throw "Companion CLI copy missing at target: $CliTarget"
+}
+if ($CliExeItem.FullName -ne $CliTarget -and (Test-Path $CliExeItem.FullName)) {
+    Remove-Item $CliExeItem.FullName -Force
+}
+$ZipEntries = Get-ChildItem -Path $GuiDist -Force | Select-Object -ExpandProperty FullName
+if (-not $ZipEntries) {
+    throw "GUI dist folder is empty: $GuiDist"
+}
+Compress-Archive -Path $ZipEntries -DestinationPath $ZipTarget -Force
 
 Write-Host ""
 Write-Host "Bundle pronto:" $GuiDist
 Write-Host "GUI exe:" (Join-Path $GuiDist "affitto_gui.exe")
 Write-Host "CLI companion:" $CliTarget
-Write-Host "Stable zip:" $StableZip
+Write-Host "Stable zip:" $ZipTarget

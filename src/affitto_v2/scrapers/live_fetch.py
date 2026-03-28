@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import random
@@ -16,11 +17,13 @@ from browserforge.fingerprints import Screen
 from camoufox.async_api import AsyncNewBrowser
 from camoufox.exceptions import CamoufoxNotInstalled
 from camoufox.pkgman import launch_path as camoufox_launch_path
+from camoufox.utils import launch_options as camoufox_launch_options
 from playwright.async_api import TimeoutError as PlaywrightTimeout
 from playwright.async_api import async_playwright
 
 from ..db import Database, ListingRecord
 from ..models import CaptchaMode, ExtractionFields
+from .render_context import install_render_context_init_script
 
 _CAPTCHA_URL_KEYS = (
     "captcha-delivery.com",
@@ -107,6 +110,14 @@ _IDEALISTA_PRIVATE_ONLY_DETAIL_DELAY_MS = (900, 1800)
 _IDEALISTA_PRIVATE_ONLY_DETAIL_BATCH_PAUSE_EVERY = 4
 _IDEALISTA_PRIVATE_ONLY_DETAIL_BATCH_PAUSE_MS = (1600, 3200)
 _HTTP_NETWORK_STATUSES = {408, 425, 500, 502, 503, 504, 522, 524}
+_INTERACTION_PACING_GAMMA_SHAPE = 2.0
+_INTERACTION_PACING_GAMMA_SCALE = 1.5
+_STATIC_RESOURCE_BOOTSTRAP_URLS = (
+    "https://www.gstatic.com/generate_204",
+    "https://www.google.it/generate_204",
+    "https://www.cloudflare.com/cdn-cgi/trace",
+)
+_STATIC_RESOURCE_BOOTSTRAP_TIMEOUT_MS = 5000
 
 _HARD_BLOCK_PATTERNS = (
     re.compile(r"uso\s+improprio", re.IGNORECASE),
@@ -121,22 +132,30 @@ _CHANNEL_LABELS = (_DEFAULT_BROWSER_LABEL,)
 _CAMOUFOX_DEFAULT_LOCALE = "it-IT"
 _CAMOUFOX_DEFAULT_OS = "windows"
 _CAMOUFOX_DEFAULT_TIMEZONE = "Europe/Rome"
-_LEGACY_BROWSER_CHANNEL_ALIASES = {
-    "camoufox": _DEFAULT_BROWSER_LABEL,
-    "firefox": _DEFAULT_BROWSER_LABEL,
-    "chromium": _DEFAULT_BROWSER_LABEL,
-    "chrome": _DEFAULT_BROWSER_LABEL,
-    "msedge": _DEFAULT_BROWSER_LABEL,
-}
-_SITE_DEFAULT_CHANNELS: dict[str, tuple[str, ...]] = {
-    "idealista": (_DEFAULT_BROWSER_LABEL,),
-    "immobiliare": (_DEFAULT_BROWSER_LABEL,),
-}
-_GUARD_STATE_VERSION = 6
+_CAMOUFOX_PERSONA_VERSION = 1
+_CAMOUFOX_PERSONA_WINDOWS = (
+    {
+        "label": "desktop_fhd_balanced",
+        "screen": (1920, 1080),
+        "windows": ((1760, 990), (1680, 960), (1600, 900)),
+    },
+    {
+        "label": "desktop_fhd_compact",
+        "screen": (1920, 1080),
+        "windows": ((1540, 900), (1480, 860), (1440, 840)),
+    },
+    {
+        "label": "desktop_fhd_wide",
+        "screen": (1920, 1080),
+        "windows": ((1820, 1020), (1740, 980), (1660, 940)),
+    },
+)
+_GUARD_STATE_VERSION = 7
 _BROWSER_MODE_MANAGED_STABLE = "managed_stable"
-_BROWSER_MODE_REAL_BROWSER_ASSISTED = "real_browser_assisted"
-_ASSIST_ENTRY_CDP_BOOTSTRAP = "cdp_bootstrap"
-_ASSIST_ENTRY_CDP_RECOVERY = "cdp_recovery"
+_HARD_BLOCK_PROFILE_RESET_SITES = {"idealista", "immobiliare"}
+_PROFILE_ROTATION_MAX_AGE_SEC: dict[str, int] = {
+    "immobiliare": 24 * 3600,
+}
 
 
 @dataclass(slots=True)
@@ -162,6 +181,9 @@ class TelemetrySnapshot:
     channel_label: str
     identity_switch: int
     session_age_sec: int
+    profile_age_sec: int
+    profile_generation: int
+    cooldown_profile_generation: int | None
     detail_touch_count: int
     retry_count: int
     risk_pause_reason: str
@@ -201,6 +223,27 @@ class BrowserSessionSlot:
     reuse_count: int = 0
     created_monotonic: float = field(default_factory=time.monotonic)
     last_used_monotonic: float = field(default_factory=time.monotonic)
+
+
+@dataclass(slots=True)
+class CamoufoxPersona:
+    version: int
+    persona_id: str
+    seed: int
+    site: str
+    channel_label: str
+    profile_generation: int
+    created_utc: str
+    screen_label: str
+    screen_width: int
+    screen_height: int
+    window_width: int
+    window_height: int
+    humanize_max_sec: float
+    history_length: int
+    font_spacing_seed: int
+    canvas_aa_offset: int
+    launch_options: dict[str, object]
 
 
 @dataclass(slots=True)
@@ -358,6 +401,13 @@ def _parse_utc_iso(value: str | None) -> datetime | None:
         return None
 
 
+def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
 def _site_key_from_url(url: str) -> str:
     host = (urlparse(url).hostname or "").lower()
     if "idealista.it" in host:
@@ -371,22 +421,203 @@ def _normalize_channel_label(value: str | None) -> str:
     raw = (value or "").strip().lower()
     if not raw:
         return _DEFAULT_BROWSER_LABEL
-    return _LEGACY_BROWSER_CHANNEL_ALIASES.get(raw, raw)
+    return raw
 
 
 def _channel_to_label(channel: str | None) -> str:
     return _normalize_channel_label(channel)
 
 
+def _camoufox_persona_path(profile_root: Path) -> Path:
+    return profile_root / "camoufox_persona.json"
+
+
+def _camoufox_persona_seed(*, site: str, channel_label: str, profile_generation: int) -> int:
+    raw = f"{site}|{channel_label}|{profile_generation}|camoufox-persona-v{_CAMOUFOX_PERSONA_VERSION}"
+    digest = hashlib.sha256(raw.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big", signed=False)
+
+
+def _camoufox_screen_constraints(*, width: int = 1920, height: int = 1080) -> Screen:
+    return Screen(
+        min_width=width,
+        max_width=width,
+        min_height=height,
+        max_height=height,
+    )
+
+
+def _camoufox_persona_from_payload(payload: dict[str, object]) -> CamoufoxPersona | None:
+    try:
+        launch_options = payload.get("launch_options")
+        if not isinstance(launch_options, dict):
+            return None
+        persona = CamoufoxPersona(
+            version=int(payload.get("version") or 0),
+            persona_id=str(payload.get("persona_id") or "").strip(),
+            seed=int(payload.get("seed") or 0),
+            site=str(payload.get("site") or "").strip(),
+            channel_label=str(payload.get("channel_label") or "").strip(),
+            profile_generation=int(payload.get("profile_generation") or 0),
+            created_utc=str(payload.get("created_utc") or "").strip(),
+            screen_label=str(payload.get("screen_label") or "").strip(),
+            screen_width=int(payload.get("screen_width") or 0),
+            screen_height=int(payload.get("screen_height") or 0),
+            window_width=int(payload.get("window_width") or 0),
+            window_height=int(payload.get("window_height") or 0),
+            humanize_max_sec=float(payload.get("humanize_max_sec") or 0.0),
+            history_length=int(payload.get("history_length") or 0),
+            font_spacing_seed=int(payload.get("font_spacing_seed") or 0),
+            canvas_aa_offset=int(payload.get("canvas_aa_offset") or 0),
+            launch_options=launch_options,
+        )
+    except (TypeError, ValueError):
+        return None
+    if (
+        persona.version != _CAMOUFOX_PERSONA_VERSION
+        or not persona.persona_id
+        or not persona.site
+        or not persona.channel_label
+        or not persona.created_utc
+        or not persona.screen_label
+        or persona.screen_width <= 0
+        or persona.screen_height <= 0
+        or persona.window_width <= 0
+        or persona.window_height <= 0
+        or persona.humanize_max_sec <= 0
+        or persona.history_length <= 0
+        or not persona.launch_options
+    ):
+        return None
+    return persona
+
+
+def _build_camoufox_persona(
+    *,
+    site: str,
+    channel_label: str,
+    profile_generation: int,
+    executable_path: Path | None,
+    now: datetime,
+) -> CamoufoxPersona:
+    resolved_executable_path = executable_path if executable_path is not None and executable_path.exists() else None
+    seed = _camoufox_persona_seed(
+        site=site,
+        channel_label=channel_label,
+        profile_generation=profile_generation,
+    )
+    rng = random.Random(seed)
+    screen_profile = _CAMOUFOX_PERSONA_WINDOWS[rng.randrange(len(_CAMOUFOX_PERSONA_WINDOWS))]
+    screen_width, screen_height = screen_profile["screen"]
+    window_width, window_height = rng.choice(screen_profile["windows"])
+    humanize_max_sec = round(rng.uniform(0.95, 1.45), 2)
+    history_length = rng.randint(2, 5)
+    font_spacing_seed = rng.randint(0, 1_073_741_823)
+    canvas_aa_offset = rng.randint(-18, 18)
+    config = {
+        "timezone": _CAMOUFOX_DEFAULT_TIMEZONE,
+        "window.history.length": history_length,
+        "fonts:spacing_seed": font_spacing_seed,
+        "canvas:aaOffset": canvas_aa_offset,
+        "canvas:aaCapOffset": True,
+    }
+    launch_options = camoufox_launch_options(
+        headless=False,
+        humanize=humanize_max_sec,
+        locale=_CAMOUFOX_DEFAULT_LOCALE,
+        os=_CAMOUFOX_DEFAULT_OS,
+        screen=_camoufox_screen_constraints(width=screen_width, height=screen_height),
+        window=(window_width, window_height),
+        config=config,
+        executable_path=resolved_executable_path,
+        i_know_what_im_doing=True,
+    )
+    return CamoufoxPersona(
+        version=_CAMOUFOX_PERSONA_VERSION,
+        persona_id=f"{site}-{channel_label}-g{profile_generation:03d}-{seed % 10000:04d}",
+        seed=seed,
+        site=site,
+        channel_label=channel_label,
+        profile_generation=profile_generation,
+        created_utc=now.isoformat(),
+        screen_label=str(screen_profile["label"]),
+        screen_width=screen_width,
+        screen_height=screen_height,
+        window_width=window_width,
+        window_height=window_height,
+        humanize_max_sec=humanize_max_sec,
+        history_length=history_length,
+        font_spacing_seed=font_spacing_seed,
+        canvas_aa_offset=canvas_aa_offset,
+        launch_options=launch_options,
+    )
+
+
+def _load_or_create_camoufox_persona(
+    *,
+    site: str,
+    channel_label: str,
+    profile_generation: int,
+    profile_root: Path,
+    executable_path: Path | None,
+    logger,
+) -> CamoufoxPersona:
+    persona_path = _camoufox_persona_path(profile_root)
+    if persona_path.exists():
+        try:
+            raw = json.loads(persona_path.read_text(encoding="utf-8"))
+        except Exception:
+            raw = None
+        if isinstance(raw, dict):
+            persona = _camoufox_persona_from_payload(raw)
+            if (
+                persona is not None
+                and persona.site == site
+                and persona.channel_label == channel_label
+                and persona.profile_generation == profile_generation
+            ):
+                return persona
+            logger.info(
+                "Camoufox persona file invalid or stale. site=%s channel=%s generation=%s file=%s",
+                site,
+                channel_label,
+                profile_generation,
+                persona_path,
+            )
+    persona = _build_camoufox_persona(
+        site=site,
+        channel_label=channel_label,
+        profile_generation=profile_generation,
+        executable_path=executable_path,
+        now=_utc_now(),
+    )
+    _write_json_atomic(persona_path, asdict(persona))
+    logger.info(
+        "Created Camoufox persona. site=%s channel=%s generation=%s persona=%s screen=%sx%s window=%sx%s humanize_max_sec=%s file=%s",
+        site,
+        channel_label,
+        profile_generation,
+        persona.persona_id,
+        persona.screen_width,
+        persona.screen_height,
+        persona.window_width,
+        persona.window_height,
+        persona.humanize_max_sec,
+        persona_path,
+    )
+    return persona
+
+
 def _label_to_channel(label: str) -> str | None:
-    normalized = _normalize_channel_label(label)
-    return None if normalized == _DEFAULT_BROWSER_LABEL else normalized
+    _normalize_channel_label(label)
+    return None
 
 
 def _new_guard_site_entry() -> dict[str, object]:
     return {
         "strikes": 0,
         "cooldown_until_utc": "",
+        "cooldown_profile_generation": "",
         "last_reason": "",
         "last_outcome_tier": "",
         "last_outcome_code": "",
@@ -416,6 +647,10 @@ def _new_guard_site_entry() -> dict[str, object]:
         "last_missing_agency_pct": 0,
         "probe_after_utc": "",
         "probe_attempts": 0,
+        "profile_generation": 0,
+        "profile_created_utc": "",
+        "profile_rotated_utc": "",
+        "profile_quarantine_reason": "",
     }
 
 
@@ -567,6 +802,79 @@ def _site_state(state: dict, site: str) -> dict:
     return entry
 
 
+def _profile_generation(entry: dict) -> int:
+    try:
+        value = int(entry.get("profile_generation") or 0)
+    except (TypeError, ValueError):
+        value = 0
+    return max(0, value)
+
+
+def _ensure_site_profile_tracking(entry: dict, now: datetime) -> bool:
+    changed = False
+    generation = _profile_generation(entry)
+    if generation != entry.get("profile_generation"):
+        entry["profile_generation"] = generation
+        changed = True
+    created_at = _parse_utc_iso(str(entry.get("profile_created_utc") or ""))
+    if created_at is None:
+        entry["profile_created_utc"] = now.isoformat()
+        changed = True
+    return changed
+
+
+def _site_profile_age_sec(entry: dict, now: datetime) -> int:
+    created_at = _parse_utc_iso(str(entry.get("profile_created_utc") or ""))
+    if created_at is None:
+        return 0
+    return max(0, int((now - created_at).total_seconds()))
+
+
+def _site_profile_rotation_age_cap_sec(site: str) -> int:
+    return max(0, int(_PROFILE_ROTATION_MAX_AGE_SEC.get(site, 0) or 0))
+
+
+def _rotate_site_profile(entry: dict, *, now: datetime, reason: str) -> tuple[int, int]:
+    previous_generation = _profile_generation(entry)
+    next_generation = previous_generation + 1
+    entry["profile_generation"] = next_generation
+    entry["profile_created_utc"] = now.isoformat()
+    entry["profile_rotated_utc"] = now.isoformat()
+    entry["profile_quarantine_reason"] = reason
+    return (previous_generation, next_generation)
+
+
+def _maybe_rotate_site_profile(*, state: dict, site: str, now: datetime, logger) -> bool:
+    entry = _site_state(state, site)
+    changed = _ensure_site_profile_tracking(entry, now)
+    age_cap_sec = _site_profile_rotation_age_cap_sec(site)
+    if age_cap_sec <= 0:
+        return changed
+    profile_age_sec = _site_profile_age_sec(entry, now)
+    if profile_age_sec < age_cap_sec:
+        return changed
+    previous_generation, next_generation = _rotate_site_profile(
+        entry,
+        now=now,
+        reason="profile_age_cap",
+    )
+    logger.info(
+        "Preemptive site profile rotation. site=%s previous_generation=%s next_generation=%s profile_age_sec=%s age_cap_sec=%s",
+        site,
+        previous_generation,
+        next_generation,
+        profile_age_sec,
+        age_cap_sec,
+    )
+    return True
+
+
+def _site_profile_generation(state: dict | None, site: str) -> int:
+    if state is None:
+        return 0
+    return _profile_generation(_site_state(state, site))
+
+
 def _is_warmup_entry(entry: dict) -> bool:
     raw = entry.get("warmup_active")
     if isinstance(raw, bool):
@@ -595,10 +903,24 @@ def _blocked_family_from_outcome(outcome: FetchOutcome) -> str:
     return ""
 
 
+def _cooldown_profile_generation(entry: dict) -> int | None:
+    raw = entry.get("cooldown_profile_generation")
+    if raw in ("", None):
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return max(0, value)
+
+
 def _cooldown_remaining_sec(state: dict, site: str, now: datetime) -> int:
     entry = _site_state(state, site)
     until = _parse_utc_iso(str(entry.get("cooldown_until_utc") or ""))
     if until is None:
+        return 0
+    cooldown_generation = _cooldown_profile_generation(entry)
+    if cooldown_generation is not None and _profile_generation(entry) != cooldown_generation:
         return 0
     delta = int((until - now).total_seconds())
     return delta if delta > 0 else 0
@@ -723,6 +1045,9 @@ def _build_telemetry_snapshot(
         channel_label=channel_label,
         identity_switch=identity_switch,
         session_age_sec=_session_age_sec(entry, now),
+        profile_age_sec=_site_profile_age_sec(entry, now),
+        profile_generation=_profile_generation(entry),
+        cooldown_profile_generation=_cooldown_profile_generation(entry),
         detail_touch_count=attempt_stats.detail_touch_count,
         retry_count=attempt_stats.retry_count,
         risk_pause_reason=_risk_pause_reason(outcome=outcome, decision=decision),
@@ -735,27 +1060,25 @@ def _build_telemetry_snapshot(
     )
 
 
-def _allow_alternate_browser_retry(
-    *,
-    cards: list[dict],
-    outcome: FetchOutcome,
-    requested_channel: str | None,
-    rotation_mode: str,
-    alternate_candidates: list[str | None],
-    risk_budget: RiskBudget,
-    identity_switch_count: int,
-) -> tuple[bool, str]:
-    if cards:
-        return (False, "cards_present")
-    if outcome.tier != "blocked" or outcome.code not in {"interstitial_datadome", "challenge_visible"}:
-        return (False, "outcome_not_retryable")
-    if requested_channel is not None or rotation_mode != "round_robin":
-        return (False, "browser_rotation_not_auto")
-    if not alternate_candidates:
-        return (False, "no_alternate_candidates")
-    if identity_switch_count >= risk_budget.identity_budget:
-        return (False, "identity_budget_exhausted")
-    return (True, "")
+def _log_site_guard_telemetry(*, logger, snapshot: TelemetrySnapshot, url: str) -> None:
+    logger.info(
+        "Site guard telemetry. site=%s browser_mode=%s state=%s retry_count=%s detail_touch_count=%s "
+        "identity_switch=%s risk_pause_reason=%s session_age_sec=%s profile_age_sec=%s "
+        "profile_generation=%s cooldown_generation=%s cooldown_origin=%s url=%s",
+        snapshot.site,
+        snapshot.browser_mode,
+        snapshot.state_transition,
+        snapshot.retry_count,
+        snapshot.detail_touch_count,
+        snapshot.identity_switch,
+        snapshot.risk_pause_reason or "none",
+        snapshot.session_age_sec,
+        snapshot.profile_age_sec,
+        snapshot.profile_generation,
+        snapshot.cooldown_profile_generation if snapshot.cooldown_profile_generation is not None else "none",
+        snapshot.cooldown_origin or "none",
+        url,
+    )
 
 
 def _remaining_detail_budget(*, risk_budget: RiskBudget, run_risk: RunRiskState) -> int:
@@ -1230,6 +1553,7 @@ def _apply_guard_outcome(
         entry["consecutive_suspect"] = 0
         entry["consecutive_blocks"] = 0
         entry["cooldown_until_utc"] = ""
+        entry["cooldown_profile_generation"] = ""
         entry["last_success_utc"] = now.isoformat()
         entry["last_valid_channel"] = channel_label
         entry["last_block_family"] = ""
@@ -1272,9 +1596,18 @@ def _apply_guard_outcome(
         blocks = int(entry.get("consecutive_blocks") or 0) + 1
         entry["consecutive_blocks"] = blocks
         entry["consecutive_suspect"] = 0
+        cooldown_generation = _profile_generation(entry)
+        if blocked_family == "hard_block" and site in _HARD_BLOCK_PROFILE_RESET_SITES:
+            previous_generation, _ = _rotate_site_profile(
+                entry,
+                now=now,
+                reason=f"hard_block:{outcome.code or 'hard_block'}",
+            )
+            cooldown_generation = previous_generation
         if was_warmup and int(entry.get("warmup_failures") or 0) <= 1:
             entry["strikes"] = 0
             entry["cooldown_until_utc"] = ""
+            entry["cooldown_profile_generation"] = ""
             return GuardDecision(
                 action="warmup_observe_blocked",
                 transition=transition,
@@ -1290,6 +1623,7 @@ def _apply_guard_outcome(
             action = "apply_cooldown_block"
         entry["strikes"] = strikes
         entry["cooldown_until_utc"] = (now + timedelta(seconds=cooldown)).isoformat()
+        entry["cooldown_profile_generation"] = cooldown_generation
         if blocked_family == "interstitial":
             probe_delay = _interstitial_probe_delay_sec(base_sec=base_sec, cooldown_sec=cooldown)
             entry["probe_after_utc"] = (now + timedelta(seconds=probe_delay)).isoformat() if probe_delay > 0 else ""
@@ -1318,6 +1652,7 @@ def _apply_guard_outcome(
                 action = "apply_cooldown_suspect"
             entry["strikes"] = max(previous_strikes, 1)
             entry["cooldown_until_utc"] = (now + timedelta(seconds=cooldown)).isoformat()
+            entry["cooldown_profile_generation"] = _profile_generation(entry)
             return GuardDecision(
                 action=action,
                 cooldown_sec=cooldown,
@@ -1342,6 +1677,7 @@ def _apply_guard_outcome(
             action = "apply_cooldown_degraded"
         entry["strikes"] = max(previous_strikes, 1)
         entry["cooldown_until_utc"] = (now + timedelta(seconds=cooldown)).isoformat()
+        entry["cooldown_profile_generation"] = _profile_generation(entry)
         return GuardDecision(
             action=action,
             cooldown_sec=cooldown,
@@ -1397,6 +1733,24 @@ def _log_guard_decision(
         manual_assist_used=manual_assist_used,
         assist_entry_mode=assist_entry_mode,
     )
+    if (
+        outcome.tier == "blocked"
+        and str(entry.get("last_block_family") or "") == "hard_block"
+        and snapshot.cooldown_profile_generation is not None
+        and snapshot.cooldown_profile_generation != snapshot.profile_generation
+    ):
+        logger.warning(
+            "Profile identity rotated. site=%s channel=%s trigger=%s previous_generation=%s "
+            "next_generation=%s cooldown_sec=%s quarantine_reason=%s url=%s",
+            site,
+            entry.get("last_attempt_channel") or entry.get("last_valid_channel") or "unknown",
+            outcome.code,
+            snapshot.cooldown_profile_generation,
+            snapshot.profile_generation,
+            decision.cooldown_sec,
+            entry.get("profile_quarantine_reason") or "none",
+            url,
+        )
     if decision.action in {"warmup_exit_success", "warmup_recovered"}:
         logger.info(
             "Site guard warmup completed. site=%s channel=%s action=%s previous=%s/%s now=%s/%s warmup_failures=%s url=%s",
@@ -1410,19 +1764,7 @@ def _log_guard_decision(
             entry.get("warmup_last_failures", entry.get("warmup_failures")),
             url,
         )
-        logger.info(
-            "Site guard telemetry. site=%s browser_mode=%s state=%s retry_count=%s detail_touch_count=%s identity_switch=%s risk_pause_reason=%s session_age_sec=%s cooldown_origin=%s url=%s",
-            snapshot.site,
-            snapshot.browser_mode,
-            snapshot.state_transition,
-            snapshot.retry_count,
-            snapshot.detail_touch_count,
-            snapshot.identity_switch,
-            snapshot.risk_pause_reason or "none",
-            snapshot.session_age_sec,
-            snapshot.cooldown_origin or "none",
-            url,
-        )
+        _log_site_guard_telemetry(logger=logger, snapshot=snapshot, url=url)
         return snapshot
     phase = _guard_phase_label(entry)
     if phase == "warmup":
@@ -1451,19 +1793,7 @@ def _log_guard_decision(
                 site,
                 url,
             )
-        logger.info(
-            "Site guard telemetry. site=%s browser_mode=%s state=%s retry_count=%s detail_touch_count=%s identity_switch=%s risk_pause_reason=%s session_age_sec=%s cooldown_origin=%s url=%s",
-            snapshot.site,
-            snapshot.browser_mode,
-            snapshot.state_transition,
-            snapshot.retry_count,
-            snapshot.detail_touch_count,
-            snapshot.identity_switch,
-            snapshot.risk_pause_reason or "none",
-            snapshot.session_age_sec,
-            snapshot.cooldown_origin or "none",
-            url,
-        )
+        _log_site_guard_telemetry(logger=logger, snapshot=snapshot, url=url)
         return snapshot
     if outcome.tier == "healthy" and decision.recovered:
         logger.info(
@@ -1478,23 +1808,12 @@ def _log_guard_decision(
             entry.get("consecutive_successes"),
             url,
         )
-        logger.info(
-            "Site guard telemetry. site=%s browser_mode=%s state=%s retry_count=%s detail_touch_count=%s identity_switch=%s risk_pause_reason=%s session_age_sec=%s cooldown_origin=%s url=%s",
-            snapshot.site,
-            snapshot.browser_mode,
-            snapshot.state_transition,
-            snapshot.retry_count,
-            snapshot.detail_touch_count,
-            snapshot.identity_switch,
-            snapshot.risk_pause_reason or "none",
-            snapshot.session_age_sec,
-            snapshot.cooldown_origin or "none",
-            url,
-        )
+        _log_site_guard_telemetry(logger=logger, snapshot=snapshot, url=url)
         return snapshot
     log = logger.warning if outcome.tier in {"suspect", "blocked"} or decision.cooldown_sec > 0 else logger.info
     log(
-        "Site guard outcome. site=%s channel=%s tier=%s code=%s action=%s strikes=%s cooldown_sec=%s block_family=%s url=%s",
+        "Site guard outcome. site=%s channel=%s tier=%s code=%s action=%s strikes=%s cooldown_sec=%s "
+        "block_family=%s profile_generation=%s cooldown_generation=%s url=%s",
         site,
         entry.get("last_attempt_channel") or entry.get("last_valid_channel") or "unknown",
         outcome.tier,
@@ -1503,85 +1822,99 @@ def _log_guard_decision(
         entry.get("strikes"),
         decision.cooldown_sec,
         entry.get("last_block_family") or "none",
+        snapshot.profile_generation,
+        snapshot.cooldown_profile_generation if snapshot.cooldown_profile_generation is not None else "none",
         url,
     )
-    logger.info(
-        "Site guard telemetry. site=%s browser_mode=%s state=%s retry_count=%s detail_touch_count=%s identity_switch=%s risk_pause_reason=%s session_age_sec=%s cooldown_origin=%s url=%s",
-        snapshot.site,
-        snapshot.browser_mode,
-        snapshot.state_transition,
-        snapshot.retry_count,
-        snapshot.detail_touch_count,
-        snapshot.identity_switch,
-        snapshot.risk_pause_reason or "none",
-        snapshot.session_age_sec,
-        snapshot.cooldown_origin or "none",
-        url,
-    )
+    _log_site_guard_telemetry(logger=logger, snapshot=snapshot, url=url)
     return snapshot
 
 
-def _rotated_channel_candidates(
-    *,
-    requested_channel: str | None,
-    rotation_mode: str,
-    state: dict | None,
-    site: str = "",
-) -> list[str | None]:
-    if rotation_mode != "round_robin":
-        return [requested_channel]
-    if requested_channel is not None:
-        return [requested_channel]
-    entry = _site_state(state, site) if state is not None and site else None
-    base_labels = list(_SITE_DEFAULT_CHANNELS.get(site, (_DEFAULT_BROWSER_LABEL,)))
-    global_last = ""
-    if state is not None:
-        global_last = _normalize_channel_label(state.get("last_channel"))
-    if global_last not in _CHANNEL_LABELS:
-        global_last = ""
-    last_valid = _normalize_channel_label((entry or {}).get("last_valid_channel"))
-    if last_valid not in _CHANNEL_LABELS:
-        last_valid = ""
-    blocked_label = ""
-    if entry is not None and str(entry.get("last_block_family") or "").strip().lower() in {
-        "interstitial",
-        "hard_block",
-        "challenge",
-        "blocked",
-    }:
-        blocked_label = _normalize_channel_label(entry.get("last_attempt_channel"))
-        if blocked_label not in _CHANNEL_LABELS:
-            blocked_label = ""
-
-    labels: list[str] = []
-    if last_valid and last_valid != blocked_label:
-        labels.append(last_valid)
-    for label in base_labels:
-        if label != blocked_label:
-            labels.append(label)
-    if global_last and global_last != blocked_label:
-        labels.append(global_last)
-    if blocked_label:
-        labels.append(blocked_label)
-    labels.append(_DEFAULT_BROWSER_LABEL)
-    deduped: list[str] = []
-    for label in labels:
-        if label in _CHANNEL_LABELS and label not in deduped:
-            deduped.append(label)
-    labels = deduped or [_DEFAULT_BROWSER_LABEL]
-    return [_label_to_channel(label) for label in labels]
+def _channel_candidates(*, requested_channel: str | None) -> list[str | None]:
+    return [requested_channel]
 
 
-async def _close_browser_handles(*, context, browser) -> None:
+async def apply_interaction_pacing(*, logger=None, reason: str = "interaction") -> float:
+    delay_sec = max(0.0, random.gammavariate(_INTERACTION_PACING_GAMMA_SHAPE, _INTERACTION_PACING_GAMMA_SCALE))
+    if logger is not None:
+        logger.debug(
+            "Interaction pacing scheduled. reason=%s delay_sec=%.3f shape=%s scale=%s",
+            reason,
+            delay_sec,
+            _INTERACTION_PACING_GAMMA_SHAPE,
+            _INTERACTION_PACING_GAMMA_SCALE,
+        )
+    await asyncio.sleep(delay_sec)
+    if logger is not None:
+        logger.debug(
+            "Interaction pacing completed. reason=%s delay_sec=%.3f",
+            reason,
+            delay_sec,
+        )
+    return delay_sec
+
+
+async def bootstrap_static_resources_cache(context, *, logger) -> None:
+    bootstrap_page = None
+    warmed_count = 0
+    try:
+        logger.info(
+            "Static resource bootstrap start. endpoints=%s timeout_ms=%s",
+            len(_STATIC_RESOURCE_BOOTSTRAP_URLS),
+            _STATIC_RESOURCE_BOOTSTRAP_TIMEOUT_MS,
+        )
+        bootstrap_page = await context.new_page()
+        for url in _STATIC_RESOURCE_BOOTSTRAP_URLS:
+            try:
+                logger.debug("Static resource bootstrap warm-up start. url=%s", url)
+                await apply_interaction_pacing(logger=logger, reason=f"bootstrap_static_resources_cache:{url}")
+                await bootstrap_page.goto(
+                    url,
+                    wait_until="commit",
+                    timeout=_STATIC_RESOURCE_BOOTSTRAP_TIMEOUT_MS,
+                )
+                warmed_count += 1
+                logger.debug("Static resource bootstrap warm-up completed. url=%s", url)
+            except Exception as exc:
+                logger.debug(
+                    "Static resource bootstrap skipped endpoint. url=%s error=%s",
+                    url,
+                    type(exc).__name__,
+                )
+        logger.info(
+            "Static resource bootstrap completed. warmed=%s total=%s",
+            warmed_count,
+            len(_STATIC_RESOURCE_BOOTSTRAP_URLS),
+        )
+    finally:
+        if bootstrap_page is not None:
+            try:
+                await bootstrap_page.close()
+                logger.debug("Static resource bootstrap page closed.")
+            except Exception:
+                pass
+
+
+async def _close_browser_handles(*, context, browser, logger=None) -> None:
     if context is not None:
         try:
+            await apply_interaction_pacing(logger=logger, reason="close_browser_handles:context")
             await context.close()
-        except Exception:
+            if logger is not None:
+                logger.debug("Browser context closed.")
+        except Exception as exc:
+            if logger is not None:
+                logger.debug("Browser context close skipped. error=%s", type(exc).__name__)
             pass
     if browser is not None:
         try:
+            await apply_interaction_pacing(logger=logger, reason="close_browser_handles:browser")
             await browser.close()
-        except Exception:
+            if logger is not None:
+                logger.debug("Browser instance closed.")
+        except Exception as exc:
+            if logger is not None:
+                logger.debug("Browser instance close skipped. error=%s", type(exc).__name__)
             pass
 
 
@@ -1642,33 +1975,6 @@ async def _prune_site_session_slots(
     return removed
 
 
-def _filter_available_channel_candidates(candidates: list[str | None]) -> tuple[list[str | None], list[str]]:
-    skipped_labels: list[str] = []
-    filtered_candidates: list[str | None] = []
-    for candidate in candidates:
-        label = _channel_to_label(candidate)
-        if _is_channel_available(label):
-            filtered_candidates.append(candidate)
-        else:
-            skipped_labels.append(label)
-    return (filtered_candidates or candidates), skipped_labels
-
-
-def _alternate_browser_retry_candidates(
-    channel_candidates: list[str | None],
-    *,
-    current_label: str,
-) -> list[str | None]:
-    labels: list[str] = []
-    for candidate in channel_candidates:
-        label = _channel_to_label(candidate)
-        if label == current_label:
-            continue
-        if label in _CHANNEL_LABELS and label not in labels:
-            labels.append(label)
-    return [_label_to_channel(label) for label in labels]
-
-
 def _resolve_channel_executable_path(label: str) -> Path | None:
     if _normalize_channel_label(label) != _DEFAULT_BROWSER_LABEL:
         return None
@@ -1678,21 +1984,22 @@ def _resolve_channel_executable_path(label: str) -> Path | None:
         return None
 
 
-def _camoufox_screen_constraints() -> Screen:
-    return Screen(
-        min_width=1920,
-        max_width=1920,
-        min_height=1080,
-        max_height=1080,
-    )
-
-
 def _camoufox_launch_kwargs(
     *,
     headless: bool,
     executable_path: Path | None,
     persistent_profile_dir: Path | None = None,
+    persona: CamoufoxPersona | None = None,
 ) -> dict[str, object]:
+    if persona is not None:
+        launch_kwargs = json.loads(json.dumps(persona.launch_options))
+        launch_kwargs["headless"] = headless
+        if persistent_profile_dir is not None:
+            launch_kwargs["persistent_context"] = True
+            launch_kwargs["user_data_dir"] = str(persistent_profile_dir)
+        if executable_path is not None:
+            launch_kwargs["executable_path"] = str(executable_path)
+        return launch_kwargs
     launch_kwargs: dict[str, object] = {
         "headless": headless,
         "humanize": True,
@@ -1718,59 +2025,62 @@ async def _launch_browser_session(
     site: str,
     profile_dir: str | None,
     requested_channel: str | None,
-    rotation_mode: str,
     guard_state: dict | None,
     headless: bool,
     logger,
-    candidate_override: list[str | None] | None = None,
 ) -> tuple[object | None, object, object, str]:
     launch_error: Exception | None = None
     browser = None
     context = None
     page = None
-    channel_candidates = (
-        list(candidate_override)
-        if candidate_override is not None
-        else _rotated_channel_candidates(
-            requested_channel=requested_channel,
-            rotation_mode=rotation_mode,
-            state=guard_state,
-            site=site,
-        )
-    )
-    if requested_channel is None and rotation_mode == "round_robin":
-        channel_candidates, skipped_labels = _filter_available_channel_candidates(channel_candidates)
-        if skipped_labels:
-            logger.info(
-                "Auto browser channel unavailable on host. site=%s skipped=%s",
-                site,
-                ",".join(skipped_labels),
-            )
-            logger.info(
-                "Site guard channel candidates. site=%s candidates=%s",
-                site,
-                ",".join(_channel_to_label(x) for x in channel_candidates),
-            )
+    channel_candidates = _channel_candidates(requested_channel=requested_channel)
     for candidate in channel_candidates:
         channel_label = _channel_to_label(candidate)
         executable_path = _resolve_channel_executable_path(channel_label)
+        profile_generation = _site_profile_generation(guard_state, site)
         try:
             if profile_dir:
                 p_base = Path(profile_dir).expanduser()
-                p = _session_profile_root(str(p_base), site, channel_label) or _profile_dir_for_site_channel(p_base, site, channel_label)
+                p = _session_profile_root(
+                    str(p_base),
+                    site,
+                    channel_label,
+                    profile_generation=profile_generation,
+                ) or _profile_dir_for_site_channel(
+                    p_base,
+                    site,
+                    channel_label,
+                    profile_generation=profile_generation,
+                )
                 p.mkdir(parents=True, exist_ok=True)
+                persona = _load_or_create_camoufox_persona(
+                    site=site,
+                    channel_label=channel_label,
+                    profile_generation=profile_generation,
+                    profile_root=p,
+                    executable_path=executable_path,
+                    logger=logger,
+                )
                 launch_persistent_kwargs = _camoufox_launch_kwargs(
                     headless=headless,
                     executable_path=executable_path,
                     persistent_profile_dir=p,
+                    persona=persona,
                 )
                 context = await AsyncNewBrowser(pw, **launch_persistent_kwargs)
                 logger.info(
-                    "Using persistent Camoufox profile. site=%s profile=%s channel=%s launcher=%s",
+                    "Using persistent Camoufox profile. site=%s profile=%s channel=%s generation=%s launcher=%s persona=%s screen=%sx%s window=%sx%s humanize_max_sec=%s",
                     site,
                     p,
                     channel_label,
+                    profile_generation,
                     "camoufox_path" if executable_path is not None else "camoufox_default",
+                    persona.persona_id,
+                    persona.screen_width,
+                    persona.screen_height,
+                    persona.window_width,
+                    persona.window_height,
+                    persona.humanize_max_sec,
                 )
             else:
                 launch_kwargs = _camoufox_launch_kwargs(
@@ -1785,7 +2095,16 @@ async def _launch_browser_session(
                     channel_label,
                     "camoufox_path" if executable_path is not None else "camoufox_default",
                 )
+            await install_render_context_init_script(context, logger=logger)
+            await bootstrap_static_resources_cache(context, logger=logger)
             page = context.pages[0] if context.pages else await context.new_page()
+            logger.debug(
+                "Browser session launch prepared page. site=%s channel=%s bootstrap_completed=%s pages=%s",
+                site,
+                channel_label,
+                True,
+                len(context.pages),
+            )
             return browser, context, page, channel_label
         except Exception as exc:
             launch_error = exc
@@ -1804,7 +2123,7 @@ async def _launch_browser_session(
                     channel_label,
                     details.splitlines()[0] if details else repr(exc),
                 )
-            await _close_browser_handles(context=context, browser=browser)
+            await _close_browser_handles(context=context, browser=browser, logger=logger)
             context = None
             browser = None
             page = None
@@ -1854,14 +2173,33 @@ def _profile_dir_for_site(base_dir: Path, site: str) -> Path:
     return base_dir / site_slug
 
 
-def _profile_dir_for_site_channel(base_dir: Path, site: str, channel_label: str) -> Path:
-    return _profile_dir_for_channel(_profile_dir_for_site(base_dir, site), channel_label)
+def _profile_dir_for_site_channel(
+    base_dir: Path,
+    site: str,
+    channel_label: str,
+    profile_generation: int = 0,
+) -> Path:
+    site_root = _profile_dir_for_site(base_dir, site)
+    generation = max(0, int(profile_generation or 0))
+    if generation > 0:
+        site_root = site_root / f"gen-{generation:03d}"
+    return _profile_dir_for_channel(site_root, channel_label)
 
 
-def _session_profile_root(profile_dir: str | None, site: str, channel_label: str) -> Path | None:
+def _session_profile_root(
+    profile_dir: str | None,
+    site: str,
+    channel_label: str,
+    profile_generation: int = 0,
+) -> Path | None:
     if not profile_dir:
         return None
-    return _profile_dir_for_site_channel(Path(profile_dir).expanduser(), site, channel_label)
+    return _profile_dir_for_site_channel(
+        Path(profile_dir).expanduser(),
+        site,
+        channel_label,
+        profile_generation=profile_generation,
+    )
 
 
 def _session_owner_key(*, site: str, channel_label: str, profile_root: Path | None) -> str:
@@ -1869,8 +2207,19 @@ def _session_owner_key(*, site: str, channel_label: str, profile_root: Path | No
     return f"{site}|{channel_label}|{profile_part}"
 
 
-def _session_identity(*, site: str, channel_label: str, profile_dir: str | None) -> tuple[str, Path | None]:
-    profile_root = _session_profile_root(profile_dir, site, channel_label)
+def _session_identity(
+    *,
+    site: str,
+    channel_label: str,
+    profile_dir: str | None,
+    profile_generation: int = 0,
+) -> tuple[str, Path | None]:
+    profile_root = _session_profile_root(
+        profile_dir,
+        site,
+        channel_label,
+        profile_generation=profile_generation,
+    )
     return (_session_owner_key(site=site, channel_label=channel_label, profile_root=profile_root), profile_root)
 
 
@@ -1975,7 +2324,7 @@ def _extract_cards_from_html_fallback(
     return out
 
 
-async def _accept_cookies_if_present(page) -> None:
+async def _accept_cookies_if_present(page, *, logger=None) -> None:
     selectors = [
         "button#onetrust-accept-btn-handler",
         'button[id*="onetrust-accept"]',
@@ -1986,7 +2335,10 @@ async def _accept_cookies_if_present(page) -> None:
         try:
             node = page.locator(selector)
             if await node.count() > 0:
+                await apply_interaction_pacing(logger=logger, reason=f"accept_cookies:selector:{selector}")
                 await node.first.click(timeout=1200)
+                if logger is not None:
+                    logger.debug("Accepted cookies via selector. selector=%s", selector)
                 await page.wait_for_timeout(250)
                 return
         except Exception:
@@ -1996,7 +2348,10 @@ async def _accept_cookies_if_present(page) -> None:
         try:
             btn = page.get_by_role("button", name=label)
             if await btn.count() > 0:
+                await apply_interaction_pacing(logger=logger, reason=f"accept_cookies:label:{label}")
                 await btn.first.click(timeout=1200)
+                if logger is not None:
+                    logger.debug("Accepted cookies via label. label=%s", label)
                 await page.wait_for_timeout(250)
                 return
         except Exception:
@@ -2028,6 +2383,7 @@ async def _dismiss_intrusive_popups(page, *, site: str, logger) -> None:
                 node = nodes.nth(idx)
                 if not await node.is_visible():
                     continue
+                await apply_interaction_pacing(logger=logger, reason=f"dismiss_intrusive_popups:selector:{selector}")
                 await node.click(timeout=700)
                 await page.wait_for_timeout(180)
                 dismissed += 1
@@ -2047,6 +2403,7 @@ async def _dismiss_intrusive_popups(page, *, site: str, logger) -> None:
         try:
             btn = page.get_by_role("button", name=label)
             if await btn.count() > 0 and await btn.first.is_visible():
+                await apply_interaction_pacing(logger=logger, reason=f"dismiss_intrusive_popups:label:{label}")
                 await btn.first.click(timeout=700)
                 await page.wait_for_timeout(180)
                 dismissed += 1
@@ -2358,7 +2715,9 @@ async def _prepare_site_view(page, site: str, nav_timeout_ms: int, logger) -> No
         try:
             btn = await page.query_selector('[data-cy="switch-to-list"], button[aria-controls*="results-list"]')
             if btn:
+                await apply_interaction_pacing(logger=logger, reason="prepare_site_view:immobiliare_switch_to_list")
                 await btn.click(timeout=1500)
+                logger.debug("Applied immobiliare list switch before extraction.")
                 await page.wait_for_load_state("domcontentloaded", timeout=nav_timeout_ms)
                 await page.wait_for_timeout(500)
         except Exception:
@@ -2667,10 +3026,14 @@ async def _verify_idealista_private_only_candidates(
 
     for index, card in enumerate(candidates[:max_checks], start=1):
         try:
+            await apply_interaction_pacing(
+                logger=logger,
+                reason=f"idealista_private_only_detail_verification:goto:{card.get('ad_id') or index}",
+            )
             await page.goto(card["url"], timeout=nav_timeout_ms)
             await page.wait_for_load_state("domcontentloaded", timeout=nav_timeout_ms)
             await page.wait_for_timeout(random.randint(*_IDEALISTA_PRIVATE_ONLY_DETAIL_DELAY_MS))
-            await _accept_cookies_if_present(page)
+            await _accept_cookies_if_present(page, logger=logger)
             await _dismiss_intrusive_popups(page, site="idealista", logger=logger)
 
             html = await page.content()
@@ -2806,11 +3169,12 @@ async def _extract_for_url(
     request_url = _sanitize_search_url(search_url)
     if request_url != search_url:
         logger.info("Sanitized search URL for navigation. host=%s", (urlparse(search_url).hostname or "").lower())
+    await apply_interaction_pacing(logger=logger, reason=f"extract_for_url:goto:{request_url}")
     response = await page.goto(request_url, timeout=nav_timeout_ms)
     response_status = response.status if response is not None else 0
     await page.wait_for_load_state("domcontentloaded", timeout=nav_timeout_ms)
     await page.wait_for_timeout(wait_after_goto_ms)
-    await _accept_cookies_if_present(page)
+    await _accept_cookies_if_present(page, logger=logger)
     selector_primary_count = 0
     selector_alt_count = 0
 
@@ -3058,9 +3422,9 @@ def _normalize_browser_channel(value: str | None) -> str | None:
     raw = (value or "").strip().lower()
     if raw in {"", "auto"}:
         return None
-    if raw in _LEGACY_BROWSER_CHANNEL_ALIASES:
-        return _LEGACY_BROWSER_CHANNEL_ALIASES[raw]
-    raise ValueError("browser_channel must be one of: auto|camoufox (legacy aliases: firefox|chromium|chrome|msedge)")
+    if raw == _DEFAULT_BROWSER_LABEL:
+        return _DEFAULT_BROWSER_LABEL
+    raise ValueError("browser_channel must be one of: auto|camoufox")
 
 
 async def fetch_live_once(
@@ -3082,7 +3446,6 @@ async def fetch_live_once(
     guard_jitter_max_sec: int,
     guard_base_cooldown_sec: int,
     guard_max_cooldown_sec: int,
-    channel_rotation_mode: str,
     guard_ignore_cooldown: bool,
     artifact_retention_days: int = 0,
     listing_cache_db_path: str | None = None,
@@ -3108,8 +3471,6 @@ async def fetch_live_once(
             retention_sec=max(0, int(artifact_retention_days)) * 24 * 3600 or _LIVE_DEBUG_RETENTION_SEC,
         )
     channel = _normalize_browser_channel(browser_channel)
-    if channel_rotation_mode not in {"off", "round_robin"}:
-        raise ValueError("channel_rotation_mode must be one of: off|round_robin")
     guard_state_path = Path(site_guard_state_path).expanduser() if site_guard_state_path else None
     guard_state = _load_guard_state(guard_state_path) if (site_guard_enabled and guard_state_path is not None) else None
     if guard_state is not None and guard_state_path is not None:
@@ -3173,20 +3534,15 @@ async def fetch_live_once(
                 site = _site_key_from_url(url)
                 run_state_site = site
                 try:
-                    preferred_candidates = _rotated_channel_candidates(
-                        requested_channel=channel,
-                        rotation_mode=channel_rotation_mode,
-                        state=guard_state,
-                        site=site,
-                    )
+                    preferred_candidates = _channel_candidates(requested_channel=channel)
                     launch_candidates = preferred_candidates
-                    if channel is None and channel_rotation_mode == "round_robin":
-                        launch_candidates, _ = _filter_available_channel_candidates(preferred_candidates)
                     preferred_label = _channel_to_label(launch_candidates[0])
+                    profile_generation = _site_profile_generation(guard_state, site)
                     preferred_session_owner, _ = _session_identity(
                         site=site,
                         channel_label=preferred_label,
                         profile_dir=profile_dir,
+                        profile_generation=profile_generation,
                     )
 
                     if site_guard_enabled and guard_state is not None and guard_state_path is not None:
@@ -3200,6 +3556,16 @@ async def fetch_live_once(
                                 url,
                             )
                         now = _utc_now()
+                        if _maybe_rotate_site_profile(state=guard_state, site=site, now=now, logger=logger):
+                            _save_guard_state(guard_state_path, guard_state)
+                            entry = _site_state(guard_state, site)
+                            profile_generation = _site_profile_generation(guard_state, site)
+                            preferred_session_owner, _ = _session_identity(
+                                site=site,
+                                channel_label=preferred_label,
+                                profile_dir=profile_dir,
+                                profile_generation=profile_generation,
+                            )
                         rem = _cooldown_remaining_sec(guard_state, site, now)
                         probe_due = rem > 0 and _is_interstitial_probe_due(entry, now)
                         if probe_due and not guard_ignore_cooldown:
@@ -3329,7 +3695,6 @@ async def fetch_live_once(
                             site=site,
                             profile_dir=profile_dir,
                             requested_channel=channel,
-                            rotation_mode=channel_rotation_mode,
                             guard_state=guard_state,
                             headless=headless,
                             logger=logger,
@@ -3338,6 +3703,7 @@ async def fetch_live_once(
                             site=site,
                             channel_label=selected_channel_label,
                             profile_dir=profile_dir,
+                            profile_generation=_site_profile_generation(guard_state, site),
                         )
                         slot = BrowserSessionSlot(
                             owner_key=active_session_owner,
@@ -3477,137 +3843,6 @@ async def fetch_live_once(
                         )
                         await asyncio.sleep(retry_sleep)
                     attempt_stats.retry_count = url_retry_count
-                    alternate_candidates = _alternate_browser_retry_candidates(
-                        launch_candidates,
-                        current_label=selected_channel_label or _DEFAULT_BROWSER_LABEL,
-                    )
-                    should_retry_with_alternate, alternate_retry_reason = _allow_alternate_browser_retry(
-                        cards=cards,
-                        outcome=outcome,
-                        requested_channel=channel,
-                        rotation_mode=channel_rotation_mode,
-                        alternate_candidates=alternate_candidates,
-                        risk_budget=risk_budget,
-                        identity_switch_count=identity_switch_count,
-                    )
-                    if should_retry_with_alternate:
-                        logger.info(
-                            "Blocked live outcome. site=%s channel=%s code=%s retrying_with_alternate_browser=%s url=%s",
-                            site,
-                            selected_channel_label or _DEFAULT_BROWSER_LABEL,
-                            outcome.code,
-                            ",".join(_channel_to_label(candidate) for candidate in alternate_candidates),
-                            url,
-                        )
-                        await _close_browser_handles(context=context, browser=browser)
-                        browser = None
-                        context = None
-                        page = None
-                        try:
-                            previous_channel_label = selected_channel_label or _DEFAULT_BROWSER_LABEL
-                            browser, context, page, selected_channel_label = await _launch_browser_session(
-                                pw=pw,
-                                site=site,
-                                profile_dir=profile_dir,
-                                requested_channel=channel,
-                                rotation_mode=channel_rotation_mode,
-                                guard_state=guard_state,
-                                headless=headless,
-                                logger=logger,
-                                candidate_override=alternate_candidates,
-                            )
-                            active_session_owner, profile_root = _session_identity(
-                                site=site,
-                                channel_label=selected_channel_label,
-                                profile_dir=profile_dir,
-                            )
-                            session_slots[active_session_owner] = BrowserSessionSlot(
-                                owner_key=active_session_owner,
-                                site=site,
-                                channel_label=selected_channel_label,
-                                profile_root=str(profile_root) if profile_root is not None else "",
-                                browser=browser,
-                                context=context,
-                                page=page,
-                            )
-                            pruned_slots = await _prune_site_session_slots(
-                                session_slots,
-                                site=site,
-                                preserve_owner=active_session_owner,
-                            )
-                            site_session_replace_count += pruned_slots
-                            replace_count, owner_state = _register_site_session_replace(
-                                run_risk,
-                                site=site,
-                                replaced_slots=pruned_slots,
-                            )
-                            active_session_site = site
-                            if selected_channel_label != previous_channel_label:
-                                identity_switch_count += 1
-                            logger.info(
-                                "Alternate owner acquired. site=%s owner=%s pruned_same_site_slots=%s site_owner_replace_count=%s owner_state=%s",
-                                site,
-                                active_session_owner,
-                                pruned_slots,
-                                replace_count,
-                                owner_state,
-                            )
-                            if run_risk.assist_required:
-                                manual_assist_used = True
-                                logger.warning(
-                                    "Assist required after alternate same-site owner churn. site=%s owner=%s replace_count=%s reason=%s",
-                                    site,
-                                    active_session_owner,
-                                    replace_count,
-                                    run_risk.assist_reason,
-                                )
-                                break
-                            if guard_state is not None and guard_state_path is not None:
-                                guard_state["last_channel"] = selected_channel_label
-                                _save_guard_state(guard_state_path, guard_state)
-                            cards, outcome, attempt_stats = await _extract_for_url(
-                                page=page,
-                                search_url=url,
-                                extraction=extraction,
-                                max_per_site=max_per_site,
-                                wait_after_goto_ms=wait_after_goto_ms,
-                                nav_timeout_ms=nav_timeout_ms,
-                                captcha_mode=captcha_mode,
-                                captcha_wait_sec=captcha_wait_sec,
-                                headless=headless,
-                                debug_dir=debug_path,
-                                listing_cache_db=listing_cache_db,
-                                detail_budget_remaining=_remaining_detail_budget(risk_budget=risk_budget, run_risk=run_risk),
-                                logger=logger,
-                            )
-                            attempt_stats.retry_count = url_retry_count
-                            run_risk.detail_used += attempt_stats.detail_touch_count
-                            detail_touch_count_total += attempt_stats.detail_touch_count
-                            logger.info(
-                                "Alternate browser retry result. site=%s channel=%s tier=%s code=%s listings=%s url=%s",
-                                site,
-                                selected_channel_label or _DEFAULT_BROWSER_LABEL,
-                                outcome.tier,
-                                outcome.code,
-                                len(cards) if cards else outcome.listings,
-                                url,
-                            )
-                        except Exception as exc:
-                            logger.warning(
-                                "Alternate browser retry failed to start. site=%s details=%s",
-                                site,
-                                str(exc).splitlines()[0] if str(exc) else repr(exc),
-                            )
-                    elif alternate_retry_reason == "identity_budget_exhausted":
-                        logger.info(
-                            "Alternate browser retry suppressed by risk budget. site=%s channel=%s code=%s identity_switch=%s identity_budget=%s url=%s",
-                            site,
-                            selected_channel_label or _DEFAULT_BROWSER_LABEL,
-                                outcome.code,
-                                identity_switch_count,
-                                risk_budget.identity_budget,
-                                url,
-                            )
                     logger.info(
                         "Fetch URL result. site=%s channel=%s tier=%s code=%s listings=%s retry_count=%s detail_touch_count=%s identity_switch=%s url=%s",
                         site,

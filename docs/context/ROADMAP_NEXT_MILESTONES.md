@@ -9,13 +9,15 @@ Oggi va trattata come preview branch della prossima linea live e serve a validar
 - session continuity
 - pacing prudente
 - identita stabile per sito
-- recovery assistita
+- observability utile
 
 ## Fase corrente
 La fase corrente non e piu "foundation".
 E `preview hardening`:
 - soak reali comparabili
 - precisione `private_only`
+- semplificazione `camoufox-only`
+- refactor prudente del core live
 - packaging coerente
 - docs vive non contraddittorie
 
@@ -136,26 +138,28 @@ Ridurre il rumore strutturale del run.
 
 ### Stato
 In corso.
-Il fix piu recente e la memoria negativa `private_only` per i professionali Idealista.
+I fix piu recenti hanno chiuso:
+- memoria negativa `private_only` per i professionali Idealista
+- rotazione profilo persistente guidata da `profile_generation`
+- persona Camoufox persistente per generazione
+- modalita GUI `debugger`
+- render context deterministico cross-host
+- adaptive interaction pacing su `goto/click/close`
 
-## Milestone 3 - Real Browser Assisted
+Il focus aperto resta:
+- validazione soak della nuova policy profilo
+- validazione soak del nuovo render context / pacing
+- semplificazione del core legacy multi-browser
+- refactor prudente di `live_fetch.py`
 
-### Obiettivo
-Aprire modalita assistite senza farle diventare default.
+## Milestone 3 - Dismessa
 
-### Deliverable
-- `cdp_bootstrap`
-- `cdp_recovery`
-- trigger separati
-- log separati
+### Stato decisionale
+Questa milestone era un'ipotesi di workaround.
+Con la strategia `camoufox-only` e con l'hardening della profile identity non e piu parte della roadmap attiva.
 
-### KPI minimi
-- `cdp_bootstrap_success_rate`
-- `cdp_recovery_success_rate`
-- `assist_required_rate`
-
-### Stato
-Non aperta operativamente.
+### Regola pratica
+Non aggiungere nuovi percorsi CDP o "assistiti" nel core salvo nuova decisione esplicita supportata da dati reali.
 
 ## Milestone 4 - Promotion Gate
 

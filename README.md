@@ -1,9 +1,9 @@
-# Affitto 2.2 Stable
+# Affitto 2.2.1 Stable
 
-La cartella resta `2.2_test`, ma a questo punto va trattata come root di lavoro della release `2.2 stable`.
+La cartella resta `2.2_test`, ma a questo punto va trattata come root di lavoro della release `2.2.1 stable`.
 
 Non e la baseline storica `2.1_stable`.
-`2.1_stable` resta la baseline di provenienza; `2.2_test` contiene la linea che e stata promossa a `2.2 stable`.
+`2.1_stable` resta la baseline di provenienza; `2.2_test` contiene la linea che e stata promossa a `2.2.1 stable`.
 
 Questa linea esiste per consolidare:
 - `camoufox` come backend operativo del ramo
@@ -19,6 +19,15 @@ Questa linea esiste per consolidare:
 - soak VM del `2026-03-26` stabile
 - fix recente sulla memoria negativa `private_only` per i professionali scoperti da detail-check
 - fix del `2026-03-27` sul conteggio `detail_touch_count` di `idealista`, che evitava cooldown artificiali da errore interno
+- hardening del `2026-03-27` sulla continuita di profilo:
+  - `hard_block` => rotazione profilo persistente su `immobiliare` e `idealista`
+  - rotazione preventiva a `24h` attiva solo su `immobiliare`
+- hardening del `2026-03-27` sulla profile identity:
+  - persona Camoufox persistente per `site/channel/profile_generation`
+  - stessa generazione => stessi parametri di launch principali
+- hardening del `2026-03-28` su osservabilita:
+  - log dettagliati su render context init, pacing Gamma, bootstrap static resources e chiusura sessione
+- GUI aggiornata con `Modalita debugger` per salvare artifact in `runtime/debug` o `./debug` accanto alla dist
 
 ## Read this first
 1. `docs/context/README.md`
@@ -58,12 +67,18 @@ python run.py doctor
 I file runtime locali vengono creati sotto `runtime/` e non fanno parte della repo.
 
 ## Browser default
-Il backend live predefinito della linea `2.2 stable` e `camoufox`.
+Il backend live predefinito della linea `2.2.1 stable` e `camoufox`.
 
 Note operative:
 - root profili persistenti di default: `runtime/camoufox-profile`
-- gli alias `auto|firefox|chromium|chrome|msedge` restano accettati solo per compatibilita CLI
+- la CLI live accetta `--browser-channel auto|camoufox`
 - il launch predefinito usa fingerprint Windows umanizzato con `locale=it-IT`, `timezone=Europe/Rome` e `screen=1920x1080`
+- il backend reale del ramo resta uno solo: `camoufox`
+- i profili persistenti sono ora versionati per `site/channel/profile_generation` quando il guard decide di ruotare identita
+- `Milestone 3 / Real Browser Assisted` non e piu una direzione attiva del ramo
+- il prossimo hardening previsto non e multi-browser ma:
+  - validazione soak della nuova identity policy
+  - refactor prudente di `live_fetch.py`
 
 ## Continuous live mode
 Comando principale di soak:
@@ -105,6 +120,7 @@ Il bundle stable mantiene:
 - GUI -> default `camoufox`
 - CLI companion -> default `camoufox`
 - runtime bundle-aware -> `%LOCALAPPDATA%\AffittoV2\runtime`
+- zip di release corrente -> `dist/affitto_2_2_1_stable_bundle.zip`
 
 ## Compatibilita
 I comandi applicativi ereditati da `2.1_stable` restano validi.

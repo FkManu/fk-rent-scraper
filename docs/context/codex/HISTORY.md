@@ -113,3 +113,111 @@
   - riallineati i doc vivi da `preview` a `2.2 stable`
   - bundle Windows rinominato come stable
   - release GitHub `v2.2` destinata a sostituire la vecchia prerelease preview
+- hardening successivo del `2026-03-27` su profile identity / site guard:
+  - review log conferma `hard_block` reale su `immobiliare`, non falso positivo
+  - root cause operativa piu probabile: identity persistente troppo longeva, non puro crash del browser slot
+  - introdotta `profile_generation` nel guard state
+  - `hard_block` => rotazione profilo persistente su `immobiliare` e `idealista`
+  - rotazione preventiva a `24h` abilitata solo per `immobiliare`
+  - path profilo persistente derivato ora da `site/channel/profile_generation`
+  - reset GUI/CLI del guard state riallineati alla nuova struttura
+  - copertura test aggiornata; suite locale `66` test `OK`
+- slice successiva del `2026-03-27` su Camoufox profile realism:
+- introdotta una persona persistente per `site/channel/profile_generation`
+- la stessa generazione riusa le `launch_options` materializzate da Camoufox invece di rigenerare fingerprint/config a ogni relaunch
+- restano stabili per generazione finestra, `humanize_max_sec`, `window.history.length`, `fonts:spacing_seed`, `canvas:aaOffset`
+- corretto il binding del cooldown: dopo `hard_block`, il cooldown resta valido per la generazione bloccata ma non congela la generazione appena ruotata
+- telemetria/log guard estesi con `profile_generation`, `profile_age_sec`, `cooldown_generation` e evento esplicito `Profile identity rotated`
+  - il launch persistente logga `persona_id`, schermo e finestra usati
+  - copertura aggiornata; suite locale `69` test `OK`
+- slice successiva del `2026-03-27` su GUI debugger mode:
+  - checkbox `Modalita debugger` aggiunta alla GUI
+  - `--save-live-debug` passato da GUI sia a `Run Once` sia a `fetch-live-service`
+  - artifact debug salvati in `runtime/debug` da sorgente o `./debug` accanto alla dist
+  - nuova dist Windows stable ricostruita per il prossimo soak VM
+- riallineamento documentale del `2026-03-27`:
+  - `Milestone 3 / Real Browser Assisted` segnata come dismessa
+  - doc vivi riallineati al fatto che il ramo e `camoufox-only`
+  - formalizzati come prossimi step:
+    - soak di validazione su `profile_generation`
+    - refactor prudente di `live_fetch.py`
+- cleanup successivo del `2026-03-27` sul percorso operativo live:
+  - CLI live ridotta a `--browser-channel auto|camoufox`
+  - default CLI dei debug artifact riallineato a `runtime/debug`
+  - rimosso `--channel-rotation-mode`
+  - rimosso dal core il ramo di alternate-browser retry, non piu utile nella strategia `camoufox-only`
+  - test riallineati al nuovo contratto CLI/core
+- review operativa del `2026-03-27` sera / `2026-03-28`:
+  - soak VM breve analizzato con log + artifact `debug`
+  - finestra osservata `22:00:17 -> 23:30:29`
+  - `19` cicli osservati:
+    - `17` full `healthy`
+    - `2` con `blocked=1`
+  - un `hard_block` reale su `idealista` e uno su `immobiliare`
+  - entrambi i siti recuperano su `gen-001`
+  - il binding del cooldown alla generazione bloccata e confermato corretto sul campo
+  - la lettura viene riallineata:
+    - in questa finestra `immobiliare` non risulta nettamente peggiore di `idealista`
+    - il problema residuo e il tasso di accumulo rischio, non il freeze del servizio
+  - review backend dedicata:
+    - `immobiliare` non e piu pesante di `idealista` lato retry/detail-touch
+    - la differenza concreta di flow sta nella `prepare phase`:
+      - `switch-to-list`
+      - scroll su container risultati
+    - l'umanizzazione pagina resta ancora rigida e meccanica
+  - decisione tecnica:
+    - non aprire patch di spoofing avanzato hardware/GPU/rete
+    - prossime slice candidate:
+      - `immobiliare adaptive prepare`
+      - notifica blocco lungo `>= 1h` + recovery
+      - eventuale `soft mode` locale post-block
+- patch del `2026-03-28` su render context deterministico e pacing adattivo:
+  - nuovo modulo `src/affitto_v2/scrapers/render_context.py`
+  - `init_script` globale registrato sul `BrowserContext`
+  - descrittori browser stabilizzati:
+    - `navigator.deviceMemory=16`
+    - `navigator.hardwareConcurrency=8`
+    - WebGL vendor `Intel Inc.`
+    - WebGL renderer `Intel(R) Iris(TM) Graphics Xe`
+  - `HTMLCanvasElement.toDataURL()` riallineato con `static noise` deterministico per coerenza cross-host
+  - introdotto `apply_interaction_pacing()`
+  - pacing asincrono con distribuzione `Gamma(shape=2.0, scale=1.5)` prima di:
+    - `page.goto`
+    - `page.click`
+    - chiusura `context/browser`
+  - aggiunti test dedicati:
+    - `tests/test_render_context.py`
+    - `tests/test_interaction_pacing.py`
+  - suite locale aggiornata a `80` test `OK`
+- review completa locale del `2026-03-28`:
+  - nessun bug bloccante emerso dalle patch nuove
+  - corretto solo drift documentale residuo:
+    - note CLI ancora riferite a `channel_rotation_mode`
+    - note di contesto ancora troppo strette rispetto al nuovo render context deterministico
+- patch successiva del `2026-03-28` su bootstrap static resources cache:
+  - introdotto `bootstrap_static_resources_cache()` nel setup del `BrowserContext`
+  - warm-up tecnico su endpoint infrastrutturali comuni:
+    - `https://www.gstatic.com/generate_204`
+    - `https://www.google.it/generate_204`
+    - `https://www.cloudflare.com/cdn-cgi/trace`
+  - navigazione tecnica con `wait_until="commit"` su pagina temporanea dedicata
+  - pagina di bootstrap chiusa prima di restituire la `page` operativa
+  - test dedicato aggiunto: `tests/test_static_resource_bootstrap.py`
+  - suite locale aggiornata a `81` test `OK`
+  - nuova dist Windows stable ricostruita per il prossimo test VM
+- verifica successiva del `2026-03-28` su DataDome/profile recreation:
+  - confermata la coerenza della pipeline `hard_block -> rotate profile_generation`
+  - confermato che `interstitial_datadome` resta policy distinta:
+    - cooldown + probe controllata
+    - nessuna rotate automatica del profilo
+  - nessuna incoerenza introdotta da render context, pacing o bootstrap static resources
+- patch finale del `2026-03-28` su osservabilita e release:
+  - aggiunti log dettagliati nei punti salienti delle patch nuove:
+    - installazione `render_context` globale
+    - scheduling/completamento di `apply_interaction_pacing()`
+    - bootstrap static resources per endpoint e chiusura pagina tecnica
+    - click tecnici `cookies/popup/list-switch`
+    - chiusura `context/browser`
+  - `scripts/build_windows_bundle.ps1` riallineato all'artefatto `dist/affitto_2_2_1_stable_bundle.zip`
+  - suite locale confermata a `81` test `OK`
+  - release target aggiornata a `2.2.1 stable`

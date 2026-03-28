@@ -239,7 +239,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--browser-channel",
         default="camoufox",
-        help="Browser backend: camoufox by default (legacy aliases accepted: auto|firefox|chromium|chrome|msedge).",
+        help="Browser backend: auto|camoufox (default: camoufox).",
     )
     parser.add_argument("--max-per-site", type=int, default=0, help="Live fetch cap per site.")
     parser.add_argument("--nav-timeout-ms", type=int, default=45000, help="Live fetch navigation timeout.")
@@ -258,7 +258,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--live-debug-dir",
         default="",
-        help="Live debug artifacts directory (default: runtime/live_debug when enabled).",
+        help="Live debug artifacts directory (default: runtime/debug when enabled).",
     )
     parser.add_argument(
         "--disable-site-guard",
@@ -303,11 +303,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "--guard-ignore-cooldown",
         action="store_true",
         help="Ignore active site cooldown for this run (still records new strikes).",
-    )
-    parser.add_argument(
-        "--channel-rotation-mode",
-        default="off",
-        help="Browser channel rotation: off|round_robin.",
     )
     parser.add_argument(
         "--cycle-max-minutes",
@@ -430,17 +425,9 @@ def _parse_notify_mode(value: str) -> str:
 
 def _parse_browser_channel(value: str) -> str:
     v = (value or "camoufox").strip().lower()
-    allowed = {"auto", "camoufox", "firefox", "chromium", "chrome", "msedge"}
+    allowed = {"auto", "camoufox"}
     if v not in allowed:
         raise ConfigError(f"Invalid browser channel: {value}. Allowed: {', '.join(sorted(allowed))}")
-    return v
-
-
-def _parse_channel_rotation_mode(value: str) -> str:
-    v = (value or "off").strip().lower()
-    allowed = {"off", "round_robin"}
-    if v not in allowed:
-        raise ConfigError(f"Invalid channel rotation mode: {value}. Allowed: {', '.join(sorted(allowed))}")
     return v
 
 
@@ -461,6 +448,7 @@ def _reset_site_guard_state(path: Path, search_urls: list[str], logger) -> None:
             sites[key] = {
                 "strikes": 0,
                 "cooldown_until_utc": "",
+                "cooldown_profile_generation": "",
                 "last_reason": "",
                 "last_outcome_tier": "",
                 "last_outcome_code": "",
@@ -491,7 +479,12 @@ def _reset_site_guard_state(path: Path, search_urls: list[str], logger) -> None:
                 "probe_after_utc": "",
                 "probe_attempts": 0,
             }
-    payload = {"version": 6, "last_channel": "camoufox", "sites": sites}
+    for entry in sites.values():
+        entry["profile_generation"] = 0
+        entry["profile_created_utc"] = ""
+        entry["profile_rotated_utc"] = ""
+        entry["profile_quarantine_reason"] = ""
+    payload = {"version": 7, "last_channel": "camoufox", "sites": sites}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     logger.info("Site guard state reset. file=%s sites=%s", path, len(sites))
@@ -1087,11 +1080,10 @@ def _run_fetch_live_once(
     max_per_site = args.max_per_site if args.max_per_site > 0 else config.runtime.max_listings_per_page
     headless = not bool(args.headed)
     browser_channel = _parse_browser_channel(args.browser_channel)
-    channel_rotation_mode = _parse_channel_rotation_mode(args.channel_rotation_mode)
     profile_dir = args.profile_dir.strip() or str((config_path.parent / "camoufox-profile").resolve())
     debug_dir: str | None = None
     if args.save_live_debug or args.live_debug_dir.strip():
-        debug_dir = args.live_debug_dir.strip() or str((config_path.parent / "live_debug").resolve())
+        debug_dir = args.live_debug_dir.strip() or str((config_path.parent / "debug").resolve())
     site_guard_enabled = not bool(args.disable_site_guard)
     guard_state_file = args.guard_state_file.strip() or str((config_path.parent / "site_guard_state.json").resolve())
     guard_state_path = Path(guard_state_file).expanduser()
@@ -1104,12 +1096,11 @@ def _run_fetch_live_once(
         _reset_site_guard_state(guard_state_path, config.search_urls, logger)
     logger.info(
         "Starting live fetch run. one_shot=True headless=%s browser_channel=%s captcha_mode=%s guard_enabled=%s "
-        "channel_rotation=%s guard_ignore_cooldown=%s notify_mode=%s send_real_notifications=%s",
+        "guard_ignore_cooldown=%s notify_mode=%s send_real_notifications=%s",
         headless,
         browser_channel,
         config.runtime.captcha_mode,
         site_guard_enabled,
-        channel_rotation_mode,
         guard_ignore_cooldown,
         notify_mode,
         bool(args.send_real_notifications),
@@ -1132,7 +1123,6 @@ def _run_fetch_live_once(
         "guard_jitter_max_sec": guard_jitter_max,
         "guard_base_cooldown_sec": guard_base_cooldown_min * 60,
         "guard_max_cooldown_sec": guard_max_cooldown_min * 60,
-        "channel_rotation_mode": channel_rotation_mode,
         "guard_ignore_cooldown": guard_ignore_cooldown,
         "artifact_retention_days": config.storage.retention_days,
         "listing_cache_db_path": str(db_path),

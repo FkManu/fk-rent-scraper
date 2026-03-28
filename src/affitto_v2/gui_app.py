@@ -35,7 +35,7 @@ _SMTP_SECURITY_LABELS = {
     "none": "Nessuna sicurezza",
 }
 _SMTP_SECURITY_ORDER = ("starttls", "ssl_tls", "none")
-_GUI_STATE_VERSION = 1
+_GUI_STATE_VERSION = 2
 _LOG_LEVEL_RE = re.compile(r"\|\s*(DEBUG|INFO|WARNING|ERROR)\s*\|")
 _SUPPORTED_URL_RE = re.compile(
     r"((?:https?://)?(?:www\.)?(?:idealista\.it|immobiliare\.it)[^\s\"'<>]+)",
@@ -70,7 +70,9 @@ def _default_profile_dir_path(config_path: Path) -> Path:
 
 
 def _default_live_debug_dir_path(config_path: Path) -> Path:
-    return _runtime_dir_from_config(config_path) / "live_debug"
+    if is_frozen_bundle():
+        return get_app_root() / "debug"
+    return _runtime_dir_from_config(config_path) / "debug"
 
 
 def _app_root() -> Path:
@@ -177,6 +179,7 @@ def _load_gui_state(path: Path) -> dict:
         "blocked_agency_names": [],
         "log_filter": "INFO",
         "autostart_enabled": False,
+        "debugger_enabled": True,
     }
     try:
         if not path.exists():
@@ -200,6 +203,7 @@ def _load_gui_state(path: Path) -> dict:
             "blocked_agency_names": names,
             "log_filter": log_filter,
             "autostart_enabled": bool(raw.get("autostart_enabled", False)),
+            "debugger_enabled": bool(raw.get("debugger_enabled", True)),
         }
     except Exception:
         return default
@@ -230,6 +234,7 @@ def _reset_guard_state(path: Path, search_urls: list[str]) -> None:
             sites[key] = {
                 "strikes": 0,
                 "cooldown_until_utc": "",
+                "cooldown_profile_generation": "",
                 "last_reason": "",
                 "last_outcome_tier": "",
                 "last_outcome_code": "",
@@ -259,8 +264,12 @@ def _reset_guard_state(path: Path, search_urls: list[str]) -> None:
                 "last_missing_agency_pct": 0,
                 "probe_after_utc": "",
                 "probe_attempts": 0,
+                "profile_generation": 0,
+                "profile_created_utc": "",
+                "profile_rotated_utc": "",
+                "profile_quarantine_reason": "",
             }
-    payload = {"version": 6, "last_channel": "camoufox", "sites": sites}
+    payload = {"version": 7, "last_channel": "camoufox", "sites": sites}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -336,6 +345,10 @@ class AffittoGuiApp:
         self.log_filter_var = tk.StringVar(value=self.gui_state.get("log_filter", "INFO"))
         self.status_var = tk.StringVar(value="Pronto.")
         self.autostart_var = tk.BooleanVar(value=self._is_autostart_enabled())
+        self.debugger_mode_var = tk.BooleanVar(value=bool(self.gui_state.get("debugger_enabled", True)))
+        self.debugger_note_var = tk.StringVar(
+            value=f"Debugger mode: salva artifact in {self.live_debug_dir_path}"
+        )
         self._blocked_names: list[str] = list(self.gui_state.get("blocked_agency_names", []))
 
         self._build_ui()
@@ -692,28 +705,38 @@ class AffittoGuiApp:
         ttk.Button(frame, text="Salva Configurazione", command=self._save_configuration).grid(
             row=1, column=0, sticky="ew", padx=8, pady=(4, 6)
         )
+        ttk.Checkbutton(frame, text="Modalita debugger", variable=self.debugger_mode_var).grid(
+            row=2, column=0, sticky="w", padx=8, pady=(0, 2)
+        )
+        ttk.Label(
+            frame,
+            textvariable=self.debugger_note_var,
+            foreground="#2f4f4f",
+            wraplength=420,
+            justify=tk.LEFT,
+        ).grid(row=3, column=0, sticky="w", padx=8, pady=(0, 6))
         ttk.Button(frame, text="Run Once (reale)", command=self._run_once).grid(
-            row=2, column=0, sticky="ew", padx=8, pady=6
+            row=4, column=0, sticky="ew", padx=8, pady=6
         )
         self.start_btn = ttk.Button(frame, text="Start Servizio Continuo", command=self._start_periodic)
-        self.start_btn.grid(row=3, column=0, sticky="ew", padx=8, pady=6)
+        self.start_btn.grid(row=5, column=0, sticky="ew", padx=8, pady=6)
         self.stop_btn = ttk.Button(frame, text="Stop", command=self._stop_running, state=tk.DISABLED)
-        self.stop_btn.grid(row=4, column=0, sticky="ew", padx=8, pady=6)
+        self.stop_btn.grid(row=6, column=0, sticky="ew", padx=8, pady=6)
         ttk.Button(frame, text="Reset Site Guard", command=self._reset_guard).grid(
-            row=5, column=0, sticky="ew", padx=8, pady=6
-        )
-        ttk.Button(frame, text="Reset DB Annunci", command=self._reset_listings_db).grid(
-            row=6, column=0, sticky="ew", padx=8, pady=6
-        )
-        ttk.Button(frame, text="Reset Profili/Debug Runtime", command=self._reset_runtime_privacy_state).grid(
             row=7, column=0, sticky="ew", padx=8, pady=6
         )
-        ttk.Separator(frame).grid(row=8, column=0, sticky="ew", padx=8, pady=(8, 6))
+        ttk.Button(frame, text="Reset DB Annunci", command=self._reset_listings_db).grid(
+            row=8, column=0, sticky="ew", padx=8, pady=6
+        )
+        ttk.Button(frame, text="Reset Profili/Debug Runtime", command=self._reset_runtime_privacy_state).grid(
+            row=9, column=0, sticky="ew", padx=8, pady=6
+        )
+        ttk.Separator(frame).grid(row=10, column=0, sticky="ew", padx=8, pady=(8, 6))
         ttk.Checkbutton(frame, text="Avvio automatico GUI (Windows)", variable=self.autostart_var).grid(
-            row=9, column=0, sticky="w", padx=8, pady=(4, 2)
+            row=11, column=0, sticky="w", padx=8, pady=(4, 2)
         )
         ttk.Button(frame, text="Applica Avvio Automatico", command=self._apply_autostart).grid(
-            row=10, column=0, sticky="ew", padx=8, pady=(2, 8)
+            row=12, column=0, sticky="ew", padx=8, pady=(2, 8)
         )
         return frame
 
@@ -746,6 +769,7 @@ class AffittoGuiApp:
             "- Da sorgente: config, DB e log stanno in runtime/.\n"
             "- Da bundle: il runtime sta di default in %LOCALAPPDATA%/AffittoV2/runtime.\n"
             "- I profili persistenti del browser stanno in runtime/camoufox-profile.\n"
+            "- In modalita debugger, il bundle salva gli artifact in ./debug accanto alla dist.\n"
             "- Se serve isolarlo per test, usa la variabile AFFITTO_V2_RUNTIME_DIR.\n\n"
             "Run Once\n"
             "- Fa un solo ciclo completo di fetch, deduplica e notifiche.\n"
@@ -758,7 +782,7 @@ class AffittoGuiApp:
             "- Attivalo solo dopo test OK e un Run Once pulito.\n"
             "- La GUI salva `cycle_minutes` in configurazione e il servizio usa quel valore come cadenza target.\n"
             "- Il pulsante Stop chiede ora una chiusura pulita del servizio: attende la fine del ciclo invece di troncare subito il runtime.\n"
-            "- La dist salva artifact live debug del servizio per analizzare i blocchi; gli artifact vecchi vengono potati automaticamente.\n"
+            "- Con `Modalita debugger` attiva, sia Run Once sia servizio continuo salvano artifact debug per analizzare i blocchi.\n"
             "- Usa intervalli realistici: minimo 5 minuti, meglio 10-15 se stai ancora tarando il setup.\n\n"
             "Privacy / reset runtime\n"
             "- `Reset Profili/Debug Runtime` elimina profili browser persistenti e artifact debug salvati.\n"
@@ -1369,6 +1393,7 @@ class AffittoGuiApp:
                 "blocked_agency_names": list(self._blocked_names),
                 "log_filter": self.log_filter_var.get().strip().upper(),
                 "autostart_enabled": bool(self.autostart_var.get()),
+                "debugger_enabled": bool(self.debugger_mode_var.get()),
             }
             _save_gui_state(self.gui_state_path, self.gui_state)
             self.status_var.set("Configurazione salvata.")
@@ -1471,8 +1496,9 @@ class AffittoGuiApp:
 
     def _cli_command(self, *args: str) -> list[str]:
         if self.bundle_mode:
-            launcher = self.cli_exe if self.cli_exe.exists() else Path(sys.executable).resolve()
-            return [str(launcher), *args]
+            if not self.cli_exe.exists():
+                raise FileNotFoundError(f"CLI companion mancante nel bundle: {self.cli_exe}")
+            return [str(self.cli_exe), *args]
         return [str(sys.executable), str(self.run_py), *args]
 
     def _build_fetch_command(
@@ -1492,8 +1518,6 @@ class AffittoGuiApp:
             mode,
             "--browser-channel",
             "camoufox",
-            "--channel-rotation-mode",
-            "off",
             "--max-per-site",
             str(int(self.max_per_site_var.get())),
             "--captcha-wait-sec",
@@ -1515,8 +1539,9 @@ class AffittoGuiApp:
             cmd.append("--send-real-notifications")
         if guard_ignore_cooldown:
             cmd.append("--guard-ignore-cooldown")
-        if command == "fetch-live-service":
+        if self.debugger_mode_var.get():
             cmd.extend(["--save-live-debug", "--live-debug-dir", str(self.live_debug_dir_path)])
+        if command == "fetch-live-service":
             cmd.extend(["--service-stop-flag", str(self.service_stop_flag_path)])
         return cmd
 
@@ -1528,13 +1553,20 @@ class AffittoGuiApp:
         guard_ignore_cooldown: bool = False,
         graceful_stop_file: Path | None = None,
     ) -> int:
-        cmd = self._build_fetch_command(
-            command=command,
-            send_real_notifications=send_real_notifications,
-            guard_ignore_cooldown=guard_ignore_cooldown,
-        )
+        try:
+            cmd = self._build_fetch_command(
+                command=command,
+                send_real_notifications=send_real_notifications,
+                guard_ignore_cooldown=guard_ignore_cooldown,
+            )
+        except Exception as exc:
+            self._enqueue("log", f"[ERROR] {exc}")
+            self._enqueue("status", f"{command} non avviato.")
+            return 2
         if graceful_stop_file is not None and graceful_stop_file.exists():
             graceful_stop_file.unlink()
+        if self.debugger_mode_var.get():
+            self._enqueue("log", f"[INFO] Debugger mode ON. artifacts={self.live_debug_dir_path}")
         self._enqueue("log", f"$ {' '.join(cmd)}")
         proc = subprocess.Popen(
             cmd,

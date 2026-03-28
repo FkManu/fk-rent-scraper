@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timedelta, timezone
+import io
 import logging
 import os
 import tempfile
@@ -11,6 +12,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from src.affitto_v2 import main as app_main
+from src.affitto_v2 import gui_app
 from src.affitto_v2.db import Database, ListingRecord
 from src.affitto_v2.logging_live import SafeRotatingFileHandler, setup_logging
 from src.affitto_v2.models import AppConfig, EmailConfig, ExtractionFields, TelegramConfig
@@ -34,6 +36,14 @@ def _build_logger(name: str) -> logging.Logger:
     logger.propagate = False
     logger.setLevel(logging.INFO)
     return logger
+
+
+class _Var:
+    def __init__(self, value):
+        self._value = value
+
+    def get(self):
+        return self._value
 
 
 class PrivateOnlyModeTests(unittest.TestCase):
@@ -235,31 +245,6 @@ class LiveFetchReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(budget.identity_budget, 0)
         self.assertEqual(budget.retry_budget, 1)
 
-    def test_alternate_browser_retry_is_suppressed_when_identity_budget_is_exhausted(self) -> None:
-        allowed, reason = live_fetch._allow_alternate_browser_retry(
-            cards=[],
-            outcome=live_fetch.FetchOutcome(
-                tier="blocked",
-                code="interstitial_datadome",
-                challenge_visible=True,
-            ),
-            requested_channel=None,
-            rotation_mode="round_robin",
-            alternate_candidates=["chrome"],
-            risk_budget=live_fetch.RiskBudget(
-                page_budget=1,
-                detail_budget=0,
-                identity_budget=0,
-                retry_budget=1,
-                cooldown_budget=1,
-                manual_assist_threshold=1,
-            ),
-            identity_switch_count=0,
-        )
-
-        self.assertFalse(allowed)
-        self.assertEqual(reason, "identity_budget_exhausted")
-
     def test_transient_retry_is_suppressed_when_retry_budget_is_exhausted(self) -> None:
         run_risk = live_fetch.RunRiskState(retries_used=1)
         allowed, reason = live_fetch._allow_transient_retry(
@@ -421,6 +406,83 @@ class LiveFetchReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot.state_transition, "challenge_seen")
         self.assertEqual(snapshot.risk_pause_reason, "challenge_seen_first")
 
+    def test_telemetry_snapshot_tracks_profile_generation_and_profile_age(self) -> None:
+        now = datetime(2026, 3, 27, 12, 0, tzinfo=timezone.utc)
+        entry = live_fetch._new_guard_site_entry()
+        entry["last_attempt_channel"] = "camoufox"
+        entry["profile_generation"] = 2
+        entry["cooldown_profile_generation"] = 1
+        entry["profile_created_utc"] = (now - timedelta(minutes=10)).isoformat()
+        entry["last_success_utc"] = (now - timedelta(minutes=25)).isoformat()
+        outcome = live_fetch.FetchOutcome(tier="blocked", code="hard_block", hard_block=True)
+        decision = live_fetch.GuardDecision(action="apply_cooldown_block", cooldown_sec=1800)
+
+        snapshot = live_fetch._build_telemetry_snapshot(
+            site="immobiliare",
+            entry=entry,
+            outcome=outcome,
+            decision=decision,
+            now=now,
+            browser_mode="managed_stable",
+            channel_label="camoufox",
+            identity_switch=0,
+            attempt_stats=live_fetch.FetchAttemptStats(),
+            manual_assist_used=False,
+        )
+
+        self.assertEqual(snapshot.profile_generation, 2)
+        self.assertEqual(snapshot.cooldown_profile_generation, 1)
+        self.assertEqual(snapshot.profile_age_sec, 600)
+        self.assertEqual(snapshot.session_age_sec, 1500)
+
+    def test_log_guard_decision_reports_reactive_profile_rotation(self) -> None:
+        now = datetime(2026, 3, 27, 12, 0, tzinfo=timezone.utc)
+        state = {"sites": {"immobiliare": live_fetch._new_guard_site_entry()}}
+        entry = state["sites"]["immobiliare"]
+        entry["warmup_active"] = False
+        entry["profile_created_utc"] = (now - timedelta(hours=2)).isoformat()
+        entry["last_success_utc"] = (now - timedelta(minutes=25)).isoformat()
+        outcome = live_fetch.FetchOutcome(tier="blocked", code="hard_block", hard_block=True)
+        decision = live_fetch._apply_guard_outcome(
+            state=state,
+            site="immobiliare",
+            outcome=outcome,
+            now=now,
+            base_sec=1800,
+            max_sec=3600,
+            channel_label="camoufox",
+        )
+        entry = state["sites"]["immobiliare"]
+        stream = io.StringIO()
+        logger = logging.getLogger("test.live_fetch.guard_logging.rotation")
+        logger.handlers.clear()
+        handler = logging.StreamHandler(stream)
+        logger.addHandler(handler)
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+
+        try:
+            live_fetch._log_guard_decision(
+                logger=logger,
+                site="immobiliare",
+                url="https://www.immobiliare.it/search-list/test",
+                outcome=outcome,
+                decision=decision,
+                entry=entry,
+                browser_mode="managed_stable",
+                identity_switch=0,
+                attempt_stats=live_fetch.FetchAttemptStats(),
+                manual_assist_used=False,
+            )
+        finally:
+            logger.handlers.clear()
+
+        content = stream.getvalue()
+        self.assertIn("Profile identity rotated. site=immobiliare", content)
+        self.assertIn("previous_generation=0", content)
+        self.assertIn("next_generation=1", content)
+        self.assertIn("profile_generation=1", content)
+        self.assertIn("cooldown_generation=0", content)
     def test_idealista_selectors_cover_pro_logo_alt(self) -> None:
         self.assertIn('a[href*="/pro/"] img[alt]', live_fetch._IDEALISTA_AGENCY_ATTR_SELECTORS)
 
@@ -585,30 +647,143 @@ class LiveFetchReviewTests(unittest.IsolatedAsyncioTestCase):
     def test_profile_dir_for_site_channel_isolates_site_and_channel(self) -> None:
         base = Path("C:/runtime/browser-profile")
 
-        profile_path = live_fetch._profile_dir_for_site_channel(base, "idealista", "chrome")
+        profile_path = live_fetch._profile_dir_for_site_channel(base, "idealista", "camoufox")
 
-        self.assertEqual(profile_path, Path("C:/runtime/browser-profile/idealista/chrome"))
+        self.assertEqual(profile_path, Path("C:/runtime/browser-profile/idealista/camoufox"))
+
+    def test_profile_dir_for_site_channel_appends_generation_when_rotated(self) -> None:
+        base = Path("C:/runtime/browser-profile")
+
+        profile_path = live_fetch._profile_dir_for_site_channel(
+            base,
+            "immobiliare",
+            "camoufox",
+            profile_generation=2,
+        )
+
+        self.assertEqual(profile_path, Path("C:/runtime/browser-profile/immobiliare/gen-002/camoufox"))
+
+    def test_load_or_create_camoufox_persona_is_stable_for_same_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            profile_root = Path(tmpdir) / "immobiliare" / "gen-000" / "camoufox"
+            profile_root.mkdir(parents=True, exist_ok=True)
+            logger = _build_logger("test.live_fetch.camoufox_persona.same_generation")
+
+            persona_a = live_fetch._load_or_create_camoufox_persona(
+                site="immobiliare",
+                channel_label="camoufox",
+                profile_generation=0,
+                profile_root=profile_root,
+                executable_path=Path("C:/camoufox/camoufox.exe"),
+                logger=logger,
+            )
+            persona_b = live_fetch._load_or_create_camoufox_persona(
+                site="immobiliare",
+                channel_label="camoufox",
+                profile_generation=0,
+                profile_root=profile_root,
+                executable_path=Path("C:/camoufox/camoufox.exe"),
+                logger=logger,
+            )
+
+        self.assertEqual(persona_a.persona_id, persona_b.persona_id)
+        self.assertEqual(persona_a.seed, persona_b.seed)
+        self.assertEqual(persona_a.screen_width, persona_b.screen_width)
+        self.assertEqual(persona_a.window_width, persona_b.window_width)
+        self.assertEqual(persona_a.humanize_max_sec, persona_b.humanize_max_sec)
+
+    def test_load_or_create_camoufox_persona_changes_across_generations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            logger = _build_logger("test.live_fetch.camoufox_persona.cross_generation")
+            root_a = Path(tmpdir) / "idealista" / "camoufox"
+            root_b = Path(tmpdir) / "idealista" / "gen-001" / "camoufox"
+            root_a.mkdir(parents=True, exist_ok=True)
+            root_b.mkdir(parents=True, exist_ok=True)
+
+            persona_a = live_fetch._load_or_create_camoufox_persona(
+                site="idealista",
+                channel_label="camoufox",
+                profile_generation=0,
+                profile_root=root_a,
+                executable_path=Path("C:/camoufox/camoufox.exe"),
+                logger=logger,
+            )
+            persona_b = live_fetch._load_or_create_camoufox_persona(
+                site="idealista",
+                channel_label="camoufox",
+                profile_generation=1,
+                profile_root=root_b,
+                executable_path=Path("C:/camoufox/camoufox.exe"),
+                logger=logger,
+            )
+
+        self.assertNotEqual(persona_a.persona_id, persona_b.persona_id)
+        self.assertNotEqual(persona_a.seed, persona_b.seed)
+        self.assertNotEqual(persona_a.profile_generation, persona_b.profile_generation)
+
+    def test_camoufox_launch_kwargs_use_persona_template_when_available(self) -> None:
+        persona = live_fetch.CamoufoxPersona(
+            version=1,
+            persona_id="immobiliare-camoufox-g000-1234",
+            seed=1234,
+            site="immobiliare",
+            channel_label="camoufox",
+            profile_generation=0,
+            created_utc="2026-03-27T12:00:00+00:00",
+            screen_label="desktop_fhd",
+            screen_width=1920,
+            screen_height=1080,
+            window_width=1760,
+            window_height=990,
+            humanize_max_sec=1.2,
+            history_length=4,
+            font_spacing_seed=123456,
+            canvas_aa_offset=7,
+            launch_options={
+                "executable_path": "C:/camoufox/old.exe",
+                "args": ["--persona"],
+                "env": {"A": "1"},
+                "firefox_user_prefs": {"pref.one": True},
+                "proxy": None,
+                "headless": False,
+            },
+        )
+
+        launch_kwargs = live_fetch._camoufox_launch_kwargs(
+            headless=True,
+            executable_path=Path("C:/camoufox/current.exe"),
+            persistent_profile_dir=Path("C:/runtime/camoufox-profile/immobiliare/camoufox"),
+            persona=persona,
+        )
+
+        self.assertTrue(launch_kwargs["headless"])
+        self.assertEqual(launch_kwargs["args"], ["--persona"])
+        self.assertEqual(launch_kwargs["env"], {"A": "1"})
+        self.assertEqual(launch_kwargs["firefox_user_prefs"], {"pref.one": True})
+        self.assertEqual(Path(str(launch_kwargs["user_data_dir"])), Path("C:/runtime/camoufox-profile/immobiliare/camoufox"))
+        self.assertEqual(Path(str(launch_kwargs["executable_path"])), Path("C:/camoufox/current.exe"))
+        self.assertTrue(launch_kwargs["persistent_context"])
 
     def test_session_owner_key_includes_site_channel_and_profile(self) -> None:
         owner = live_fetch._session_owner_key(
             site="immobiliare",
-            channel_label="msedge",
-            profile_root=Path("C:/runtime/browser-profile/immobiliare/msedge"),
+            channel_label="camoufox",
+            profile_root=Path("C:/runtime/browser-profile/immobiliare/camoufox"),
         )
 
         self.assertIn("immobiliare", owner)
-        self.assertIn("msedge", owner)
-        self.assertIn("browser-profile/immobiliare/msedge", owner.replace("\\", "/"))
+        self.assertIn("camoufox", owner)
+        self.assertIn("browser-profile/immobiliare/camoufox", owner.replace("\\", "/"))
 
     def test_session_identity_changes_between_sites(self) -> None:
         idealista_owner, idealista_root = live_fetch._session_identity(
             site="idealista",
-            channel_label="chrome",
+            channel_label="camoufox",
             profile_dir="C:/runtime/browser-profile",
         )
         immobiliare_owner, immobiliare_root = live_fetch._session_identity(
             site="immobiliare",
-            channel_label="chrome",
+            channel_label="camoufox",
             profile_dir="C:/runtime/browser-profile",
         )
 
@@ -616,6 +791,112 @@ class LiveFetchReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(idealista_root, immobiliare_root)
         self.assertIn("idealista", str(idealista_root).replace("\\", "/"))
         self.assertIn("immobiliare", str(immobiliare_root).replace("\\", "/"))
+
+    def test_session_identity_includes_profile_generation(self) -> None:
+        owner, profile_root = live_fetch._session_identity(
+            site="immobiliare",
+            channel_label="camoufox",
+            profile_dir="C:/runtime/browser-profile",
+            profile_generation=3,
+        )
+
+        self.assertIn("gen-003", str(profile_root).replace("\\", "/"))
+        self.assertIn("gen-003", owner.replace("\\", "/"))
+
+    def test_maybe_rotate_site_profile_applies_preventive_rotation_only_to_immobiliare(self) -> None:
+        state = {"sites": {"immobiliare": live_fetch._new_guard_site_entry(), "idealista": live_fetch._new_guard_site_entry()}}
+        now = datetime(2026, 3, 27, 12, 0, tzinfo=timezone.utc)
+        state["sites"]["immobiliare"]["profile_created_utc"] = (now - timedelta(hours=25)).isoformat()
+        state["sites"]["idealista"]["profile_created_utc"] = (now - timedelta(hours=25)).isoformat()
+
+        immobiliare_changed = live_fetch._maybe_rotate_site_profile(
+            state=state,
+            site="immobiliare",
+            now=now,
+            logger=_build_logger("test.live_fetch.profile_rotate.immobiliare"),
+        )
+        idealista_changed = live_fetch._maybe_rotate_site_profile(
+            state=state,
+            site="idealista",
+            now=now,
+            logger=_build_logger("test.live_fetch.profile_rotate.idealista"),
+        )
+
+        self.assertTrue(immobiliare_changed)
+        self.assertEqual(state["sites"]["immobiliare"]["profile_generation"], 1)
+        self.assertEqual(state["sites"]["immobiliare"]["profile_quarantine_reason"], "profile_age_cap")
+        self.assertFalse(idealista_changed)
+        self.assertEqual(state["sites"]["idealista"]["profile_generation"], 0)
+
+    def test_apply_guard_outcome_rotates_profile_on_hard_block_for_idealista_and_immobiliare(self) -> None:
+        now = datetime(2026, 3, 27, 12, 0, tzinfo=timezone.utc)
+        outcome = live_fetch.FetchOutcome(tier="blocked", code="hard_block", hard_block=True)
+
+        for site in ("idealista", "immobiliare"):
+            state = {"sites": {site: live_fetch._new_guard_site_entry()}}
+            state["sites"][site]["warmup_active"] = False
+            state["sites"][site]["profile_created_utc"] = (now - timedelta(hours=2)).isoformat()
+
+            decision = live_fetch._apply_guard_outcome(
+                state=state,
+                site=site,
+                outcome=outcome,
+                now=now,
+                base_sec=1800,
+                max_sec=3600,
+                channel_label="camoufox",
+            )
+
+            entry = state["sites"][site]
+            self.assertEqual(decision.action, "apply_cooldown_block")
+            self.assertEqual(entry["profile_generation"], 1)
+            self.assertEqual(entry["cooldown_profile_generation"], 0)
+            self.assertEqual(entry["profile_quarantine_reason"], "hard_block:hard_block")
+
+    def test_cooldown_remaining_sec_is_bypassed_for_rotated_profile_generation(self) -> None:
+        now = datetime(2026, 3, 27, 12, 0, tzinfo=timezone.utc)
+        state = {"sites": {"immobiliare": live_fetch._new_guard_site_entry()}}
+        entry = state["sites"]["immobiliare"]
+        entry["profile_generation"] = 1
+        entry["cooldown_profile_generation"] = 0
+        entry["cooldown_until_utc"] = (now + timedelta(minutes=30)).isoformat()
+
+        remaining = live_fetch._cooldown_remaining_sec(state, "immobiliare", now)
+
+        self.assertEqual(remaining, 0)
+
+    def test_cooldown_remaining_sec_applies_to_current_profile_generation(self) -> None:
+        now = datetime(2026, 3, 27, 12, 0, tzinfo=timezone.utc)
+        state = {"sites": {"immobiliare": live_fetch._new_guard_site_entry()}}
+        entry = state["sites"]["immobiliare"]
+        entry["profile_generation"] = 1
+        entry["cooldown_profile_generation"] = 1
+        entry["cooldown_until_utc"] = (now + timedelta(minutes=30)).isoformat()
+
+        remaining = live_fetch._cooldown_remaining_sec(state, "immobiliare", now)
+
+        self.assertGreater(remaining, 0)
+
+    def test_reset_site_guard_state_seeds_profile_rotation_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "site_guard_state.json"
+            logger = _build_logger("test.main.reset_site_guard_state")
+
+            app_main._reset_site_guard_state(
+                path,
+                [
+                    "https://www.immobiliare.it/affitto-case/torino/",
+                    "https://www.idealista.it/affitto-case/torino/",
+                ],
+                logger,
+            )
+
+            payload = live_fetch._load_guard_state(path)
+
+        self.assertEqual(payload["version"], 7)
+        self.assertEqual(payload["sites"]["immobiliare"]["profile_generation"], 0)
+        self.assertEqual(payload["sites"]["immobiliare"]["cooldown_profile_generation"], "")
+        self.assertEqual(payload["sites"]["idealista"]["profile_created_utc"], "")
 
     async def test_prune_site_session_slots_closes_same_site_owners_only(self) -> None:
         keep_slot = live_fetch.BrowserSessionSlot(
@@ -665,11 +946,11 @@ class LiveFetchReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(prune_slot.context.closed)
         self.assertFalse(keep_slot.browser.closed)
 
-    def test_alternate_browser_retry_candidates_are_empty_with_single_backend(self) -> None:
-        candidates = ["msedge", "chrome", None]
-        retry_candidates = live_fetch._alternate_browser_retry_candidates(candidates, current_label="camoufox")
-
-        self.assertEqual(retry_candidates, [])
+    def test_normalize_browser_channel_accepts_only_auto_and_camoufox(self) -> None:
+        self.assertIsNone(live_fetch._normalize_browser_channel("auto"))
+        self.assertEqual(live_fetch._normalize_browser_channel("camoufox"), "camoufox")
+        with self.assertRaisesRegex(ValueError, "auto\\|camoufox"):
+            live_fetch._normalize_browser_channel("chrome")
 
     def test_classify_idealista_publisher_kind(self) -> None:
         private_body = "Persona che pubblica l'annuncio Privato Daniele Contatta l'inserzionista"
@@ -1470,7 +1751,6 @@ class LiveFetchCommandTests(unittest.TestCase):
             max_per_site=0,
             headed=False,
             browser_channel="auto",
-            channel_rotation_mode="round_robin",
             profile_dir="",
             save_live_debug=True,
             live_debug_dir="",
@@ -1519,6 +1799,28 @@ class LiveFetchCommandTests(unittest.TestCase):
                                 )
 
         self.assertEqual(captured_kwargs["artifact_retention_days"], 9)
+
+
+class GuiCommandTests(unittest.TestCase):
+    def test_build_fetch_command_omits_removed_channel_rotation_flag(self) -> None:
+        app = object.__new__(gui_app.AffittoGuiApp)
+        app.notify_mode_var = _Var("telegram")
+        app.max_per_site_var = _Var("15")
+        app.debugger_mode_var = _Var(True)
+        app.live_debug_dir_path = Path(r"C:\tmp\debug")
+        app.guard_state_path = Path(r"C:\tmp\site_guard_state.json")
+        app.service_stop_flag_path = Path(r"C:\tmp\live_service.stop")
+        app._cli_command = lambda *args: list(args)
+
+        cmd = gui_app.AffittoGuiApp._build_fetch_command(
+            app,
+            command="fetch-live-service",
+            send_real_notifications=True,
+        )
+
+        self.assertNotIn("--channel-rotation-mode", cmd)
+        self.assertIn("--save-live-debug", cmd)
+        self.assertIn("--service-stop-flag", cmd)
 
 
 if __name__ == "__main__":

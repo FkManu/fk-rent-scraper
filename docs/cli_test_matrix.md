@@ -114,7 +114,7 @@ Smoke test bundle:
 ```
 
 Artefatto stable utile per consegna locale o release:
-- `dist\affitto_2_2_stable_bundle.zip`
+- `dist\affitto_2_2_1_stable_bundle.zip`
 
 Note runtime bundle:
 - da sorgente resta `runtime`
@@ -305,14 +305,24 @@ python run.py fetch-live-once --headed --notify-mode config --browser-channel ca
 Site guard completo (jitter + classificazione outcome + cooldown):
 
 ```powershell
-python run.py fetch-live-once --headed --notify-mode both --send-real-notifications --browser-channel camoufox --channel-rotation-mode off --guard-jitter-min-sec 2 --guard-jitter-max-sec 6 --guard-base-cooldown-min 30 --guard-max-cooldown-min 360
+python run.py fetch-live-once --headed --notify-mode both --send-real-notifications --browser-channel camoufox --guard-jitter-min-sec 2 --guard-jitter-max-sec 6 --guard-base-cooldown-min 30 --guard-max-cooldown-min 360
 ```
 
 Nota backend:
 - `camoufox` e il backend operativo predefinito.
-- `auto|firefox|chromium|chrome|msedge` restano alias legacy e vengono normalizzati a `camoufox`.
-- `channel_rotation_mode` puo restare nei comandi legacy ma non fa piu parte del percorso standard raccomandato.
+- l'unico contratto supportato lato CLI e `auto|camoufox`.
 - il launch predefinito usa fingerprint Windows con `locale=it-IT`, `timezone=Europe/Rome`, `humanize=True` e `screen` Camoufox vincolato a `1920x1080`, senza piu forzare una `window` fissa.
+- il contesto pagina registra anche un `init_script` globale per coerenza cross-host:
+  - `navigator.deviceMemory=16`
+  - `navigator.hardwareConcurrency=8`
+  - WebGL vendor/renderer stabili
+  - `Canvas.toDataURL()` con rumore statico deterministico
+- le interazioni chiave (`goto`, `click`, `close`) passano ora da un pacing asincrono adattivo basato su distribuzione Gamma.
+- prima della `page` operativa il setup browser esegue anche un bootstrap tecnico delle static resources comuni su:
+  - `https://www.gstatic.com/generate_204`
+  - `https://www.google.it/generate_204`
+  - `https://www.cloudflare.com/cdn-cgi/trace`
+  - navigazione su pagina temporanea con `wait_until="commit"` e chiusura immediata
 
 Nota outcome:
 - il fetch live distingue ora `healthy`, `suspect`, `degraded`, `blocked`, `cooling`

@@ -1,22 +1,30 @@
 # REVIEW_CURRENT.md
 
 ## Patch corrente
-Stable release alignment e hardening finale `idealista`
+Render context deterministico + adaptive interaction pacing + static resources bootstrap + riallineamento docs
 
 ## Stato review
 Patch reviewata su base locale.
 
 ## Focus atteso della review
-- persistenza reale della memoria negativa `private_only`
-- assenza del vecchio `unexpected_error` su `detail_touch_count`
-- doc vivi coerenti con lo stato reale della release
-- nessun trascinamento di artefatti locali nel changeset
-- packaging coerente con il backend `camoufox`
+- wiring dell'`init_script` globale sul `BrowserContext`
+- coerenza del nuovo pacing asincrono prima di `goto/click/close`
+- coerenza del bootstrap tecnico `gstatic/google/cloudflare` nel setup della sessione
+- compatibilita delle patch recenti con la rotate del profilo su `hard_block`
+- compatibilita del contratto `camoufox-only` nei doc e nei comandi
+- nessun drift tra storico patch, doc vive e comportamento reale del codice
 
 ## Esito sintetico
-- il ramo salva ora i professionali Idealista rilevati dal detail-check in una cache negativa dedicata, invece di perderli nel filtro `private_only`
-- i test locali coprono sia il salvataggio sia il riuso della memoria professionale
-- il fix `detail_touch_count` evita il cooldown artificiale di `idealista` causato da errore interno
-- `README`, `HANDOFF`, `NEXT_STEPS`, `codex/OUTPUT_CURRENT` e `codex/INDEX` tornano ad avere ruoli distinti e non piu quasi duplicati
-- il naming della root resta `2.2_test`, ma la documentazione la posiziona in modo coerente come linea `2.2 stable`
-- residuo principale: confermare nel prossimo soak che `reused_professional` salga sopra `0`, che il pattern ripetuto sui due `ad_id` Idealista sparisca davvero e che non ricompaiano `unexpected_error`
+- nessun bug bloccante emerso nelle patch nuove
+- review di coerenza completata su:
+  - `src/affitto_v2/scrapers/live_fetch.py`
+  - `src/affitto_v2/scrapers/render_context.py`
+  - `tests/test_render_context.py`
+  - `tests/test_interaction_pacing.py`
+- review funzionale completata sul binding:
+  - `hard_block` -> rotate `profile_generation`
+  - `interstitial_datadome` -> cooldown/probe senza rotate
+- bootstrap static resources coerente col setup del nuovo `BrowserContext` e non interferente con l'owner della sessione
+- unico drift trovato: documentazione CLI/contesto ancora ferma al contratto precedente; riallineata
+- copertura locale aggiornata; suite `81` test `OK`
+- residuo principale: validazione soak del costo reale di pacing + bootstrap e dell'assenza di regressioni visuali cross-host
