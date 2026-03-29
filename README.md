@@ -1,4 +1,4 @@
-# Affitto 2.2.2 Refactorizzata
+# Scraper Affitto 2.2.2
 
 La cartella resta `2.2_test`, ma a questo punto va trattata come root di lavoro della release `2.2.2 refactorizzata`.
 
