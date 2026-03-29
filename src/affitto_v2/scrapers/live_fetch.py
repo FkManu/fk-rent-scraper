@@ -24,6 +24,12 @@ from playwright.async_api import async_playwright
 from ..db import Database, ListingRecord
 from ..models import CaptchaMode, ExtractionFields
 from .render_context import install_render_context_init_script
+from .browser import bootstrap as browser_bootstrap
+from .browser import factory as browser_factory
+from .browser.session_policy import get_session_policy
+from .guard import state_machine as guard_state_machine
+from .sites import idealista as idealista_site
+from .sites import immobiliare as immobiliare_site
 
 _CAPTCHA_URL_KEYS = (
     "captcha-delivery.com",
@@ -89,35 +95,18 @@ _SOFT_BLOCK_HTML_KEYS = (
 )
 _HTTP_BLOCK_STATUSES = {403, 429}
 
-_IDEALISTA_AGENCY_ATTR_SELECTORS = (
-    'figure[class*="listingCardAgencyLogo"] img',
-    'img[class*="listingCardAgencyLogo"]',
-    'a[href*="/pro/"] img[alt]',
-    'img[alt*="Agenzia"]',
-    'img[alt*="Immobiliare"]',
-)
-
-_IDEALISTA_AGENCY_TEXT_SELECTORS = (
-    '[class*="advertiser"] [class*="name"]',
-    '[data-testid="company-name"]',
-    '.item-info [class*="item-brand"]',
-    '.item-info [class*="company"]',
-    'a[href*="/agenzie-immobiliari/"]',
-    'a[href*="/pro/"]',
-)
-_IDEALISTA_PRIVATE_ONLY_DETAIL_MAX_CHECKS = 15
-_IDEALISTA_PRIVATE_ONLY_DETAIL_DELAY_MS = (900, 1800)
-_IDEALISTA_PRIVATE_ONLY_DETAIL_BATCH_PAUSE_EVERY = 4
-_IDEALISTA_PRIVATE_ONLY_DETAIL_BATCH_PAUSE_MS = (1600, 3200)
+_IDEALISTA_AGENCY_ATTR_SELECTORS = idealista_site.AGENCY_ATTR_SELECTORS
+_IDEALISTA_AGENCY_TEXT_SELECTORS = idealista_site.AGENCY_TEXT_SELECTORS
+_IDEALISTA_PRIVATE_ONLY_DETAIL_MAX_CHECKS = idealista_site.PRIVATE_ONLY_MAX_CHECKS
+_IDEALISTA_PRIVATE_ONLY_DETAIL_DELAY_MS = idealista_site.PRIVATE_ONLY_DELAY_MS
+_IDEALISTA_PRIVATE_ONLY_DETAIL_BATCH_PAUSE_EVERY = idealista_site.PRIVATE_ONLY_BATCH_PAUSE_EVERY
+_IDEALISTA_PRIVATE_ONLY_DETAIL_BATCH_PAUSE_MS = idealista_site.PRIVATE_ONLY_BATCH_PAUSE_MS
 _HTTP_NETWORK_STATUSES = {408, 425, 500, 502, 503, 504, 522, 524}
-_INTERACTION_PACING_GAMMA_SHAPE = 2.0
-_INTERACTION_PACING_GAMMA_SCALE = 1.5
-_STATIC_RESOURCE_BOOTSTRAP_URLS = (
-    "https://www.gstatic.com/generate_204",
-    "https://www.google.it/generate_204",
-    "https://www.cloudflare.com/cdn-cgi/trace",
-)
-_STATIC_RESOURCE_BOOTSTRAP_TIMEOUT_MS = 5000
+_DEFAULT_SESSION_POLICY = get_session_policy("immobiliare")
+_INTERACTION_PACING_GAMMA_SHAPE = _DEFAULT_SESSION_POLICY.pacing_gamma_shape
+_INTERACTION_PACING_GAMMA_SCALE = _DEFAULT_SESSION_POLICY.pacing_gamma_scale
+_STATIC_RESOURCE_BOOTSTRAP_URLS = _DEFAULT_SESSION_POLICY.bootstrap_urls
+_STATIC_RESOURCE_BOOTSTRAP_TIMEOUT_MS = _DEFAULT_SESSION_POLICY.bootstrap_timeout_ms
 
 _HARD_BLOCK_PATTERNS = (
     re.compile(r"uso\s+improprio", re.IGNORECASE),
@@ -296,6 +285,8 @@ class GuardDecision:
     recovered: bool = False
     previous_tier: str = ""
     previous_code: str = ""
+    forced_cooldown: bool = False
+    destroy_persistent_profile: bool = False
 
 
 class LiveFetchBlocked(RuntimeError):
@@ -350,32 +341,7 @@ def _utc_now() -> datetime:
 
 
 def _classify_idealista_publisher_kind(body_text: str) -> str:
-    haystack = _normalize(body_text).lower()
-    if not haystack:
-        return ""
-
-    anchors = (
-        "persona che pubblica l'annuncio",
-        "annuncio pubblicato da",
-        "contatta l'inserzionista",
-    )
-    for anchor in anchors:
-        idx = haystack.find(anchor)
-        if idx < 0:
-            continue
-        window = haystack[idx : idx + 240]
-        if re.search(r"\bprofessionista\b", window):
-            return "professionista"
-        if re.search(r"\bprivato\b", window):
-            return "privato"
-
-    professional_hits = len(re.findall(r"\bprofessionista\b", haystack))
-    private_hits = len(re.findall(r"\bprivato\b", haystack))
-    if professional_hits >= 2 and private_hits == 0:
-        return "professionista"
-    if private_hits >= 2 and professional_hits == 0:
-        return "privato"
-    return ""
+    return idealista_site.classify_publisher_kind(body_text)
 
 
 def _classify_idealista_publisher_kind_from_signals(
@@ -383,9 +349,10 @@ def _classify_idealista_publisher_kind_from_signals(
     body_text: str,
     has_professional_profile_link: bool,
 ) -> str:
-    if has_professional_profile_link:
-        return "professionista"
-    return _classify_idealista_publisher_kind(body_text)
+    return idealista_site.classify_publisher_kind_from_signals(
+        body_text=body_text,
+        has_professional_profile_link=has_professional_profile_link,
+    )
 
 
 def _parse_utc_iso(value: str | None) -> datetime | None:
@@ -982,37 +949,11 @@ def _session_age_sec(entry: dict, now: datetime) -> int:
 
 
 def _state_transition_label(*, entry: dict, outcome: FetchOutcome) -> str:
-    if outcome.tier == "cooling":
-        return "cooldown"
-    if outcome.tier == "healthy":
-        return _guard_phase_label(entry)
-    if outcome.tier == "suspect":
-        return "suspect"
-    if outcome.tier == "degraded":
-        return "degraded"
-    if outcome.challenge_visible or outcome.code in {"interstitial_datadome", "challenge_visible"}:
-        return "challenge_seen"
-    if outcome.tier == "blocked":
-        return "blocked"
-    return outcome.tier or "unknown"
+    return guard_state_machine.state_transition_label(entry=entry, outcome=outcome)
 
 
 def _risk_pause_reason(*, outcome: FetchOutcome, decision: GuardDecision) -> str:
-    if outcome.code == "cooldown_active" or decision.action == "skip_due_cooldown":
-        return "cooldown_active"
-    if outcome.code == "interstitial_datadome":
-        return "challenge_seen_first" if decision.cooldown_sec > 0 else "challenge_seen"
-    if outcome.code == "challenge_visible":
-        return "challenge_seen"
-    if "cooldown" in decision.action and outcome.tier == "suspect":
-        return "suspect_cooldown"
-    if "cooldown" in decision.action and outcome.tier == "degraded":
-        return "degraded_cooldown"
-    if "cooldown" in decision.action and outcome.tier == "blocked":
-        return "blocked_cooldown"
-    if outcome.tier == "suspect":
-        return "suspect_observe"
-    return ""
+    return guard_state_machine.risk_pause_reason(outcome=outcome, decision=decision)
 
 
 def _record_site_outcome_tier(site_tiers: dict[str, str], site: str, outcome: FetchOutcome) -> None:
@@ -1039,23 +980,22 @@ def _build_telemetry_snapshot(
     manual_assist_used: bool,
     assist_entry_mode: str = "",
 ) -> TelemetrySnapshot:
-    return TelemetrySnapshot(
+    return guard_state_machine.build_telemetry_snapshot(
+        telemetry_cls=TelemetrySnapshot,
         site=site,
+        entry=entry,
+        outcome=outcome,
+        decision=decision,
+        now=now,
         browser_mode=browser_mode,
         channel_label=channel_label,
         identity_switch=identity_switch,
+        attempt_stats=attempt_stats,
+        manual_assist_used=manual_assist_used,
         session_age_sec=_session_age_sec(entry, now),
         profile_age_sec=_site_profile_age_sec(entry, now),
         profile_generation=_profile_generation(entry),
         cooldown_profile_generation=_cooldown_profile_generation(entry),
-        detail_touch_count=attempt_stats.detail_touch_count,
-        retry_count=attempt_stats.retry_count,
-        risk_pause_reason=_risk_pause_reason(outcome=outcome, decision=decision),
-        outcome_tier=outcome.tier,
-        outcome_code=outcome.code,
-        cooldown_origin=str(entry.get("last_block_family") or ""),
-        manual_assist_used=manual_assist_used,
-        state_transition=_state_transition_label(entry=entry, outcome=outcome),
         assist_entry_mode=assist_entry_mode,
     )
 
@@ -1113,45 +1053,13 @@ def _advance_run_state(
     decision: GuardDecision,
     run_risk: RunRiskState,
 ) -> tuple[str, str]:
-    previous_state = run_risk.current_state
-    if run_risk.assist_required:
-        run_risk.current_state = "assist_required"
-        return (previous_state, run_risk.current_state)
-
-    if outcome.code in {"interstitial_datadome", "challenge_visible"} or outcome.challenge_visible:
-        run_risk.challenge_count += 1
-        run_risk.degraded_streak = 0
-        run_risk.current_state = "challenge_seen"
-        if run_risk.challenge_count >= 2:
-            _mark_assist_required(run_risk, "challenge_repeat")
-        return (previous_state, run_risk.current_state)
-
-    if outcome.tier == "healthy":
-        run_risk.degraded_streak = 0
-        run_risk.challenge_count = 0
-        run_risk.current_state = _guard_phase_label(entry)
-        return (previous_state, run_risk.current_state)
-
-    if outcome.tier == "suspect":
-        run_risk.current_state = "suspect"
-        return (previous_state, run_risk.current_state)
-
-    if outcome.tier == "degraded":
-        run_risk.degraded_streak += 1
-        run_risk.current_state = "degraded"
-        if run_risk.degraded_streak >= 2:
-            _mark_assist_required(run_risk, "persistent_degraded")
-        return (previous_state, run_risk.current_state)
-
-    if outcome.tier == "cooling":
-        run_risk.current_state = "cooldown"
-        return (previous_state, run_risk.current_state)
-
-    if outcome.tier == "blocked":
-        run_risk.current_state = "blocked"
-        return (previous_state, run_risk.current_state)
-
-    return (previous_state, run_risk.current_state)
+    return guard_state_machine.advance_run_state(
+        entry=entry,
+        outcome=outcome,
+        decision=decision,
+        run_risk=run_risk,
+        mark_assist_required=_mark_assist_required,
+    )
 
 
 def _consume_cooldown_budget(
@@ -1198,6 +1106,50 @@ def _register_site_session_replace(run_risk: RunRiskState, *, site: str, replace
     if not run_risk.assist_required:
         run_risk.current_state = "suspect"
     return (current, run_risk.current_state)
+
+
+async def _dispose_blocked_profile_if_needed(
+    *,
+    decision: GuardDecision,
+    session_slots: dict[str, BrowserSessionSlot],
+    profile_dir: str | None,
+    site: str,
+    channel_label: str,
+    entry: dict,
+    logger,
+) -> int:
+    if not decision.destroy_persistent_profile or not profile_dir:
+        return 0
+    cooldown_generation = _cooldown_profile_generation(entry)
+    if cooldown_generation is None:
+        return 0
+    doomed_root = _session_profile_root(
+        profile_dir,
+        site,
+        channel_label,
+        profile_generation=cooldown_generation,
+    )
+    doomed_owner = _session_owner_key(site=site, channel_label=channel_label, profile_root=doomed_root)
+    removed = await _prune_site_session_slots(
+        session_slots,
+        site=site,
+        preserve_owner="",
+    )
+    browser_factory.destroy_persistent_profile_root(
+        profile_root=doomed_root,
+        base_dir=profile_dir,
+        logger=logger,
+        site=site,
+    )
+    logger.info(
+        "Blocked profile disposition applied. site=%s channel=%s destroyed_generation=%s doomed_owner=%s removed_slots=%s",
+        site,
+        channel_label,
+        cooldown_generation,
+        doomed_owner,
+        removed,
+    )
+    return removed
 
 
 def _build_extraction_metrics(
@@ -1517,179 +1469,22 @@ def _apply_guard_outcome(
     max_sec: int,
     channel_label: str,
 ) -> GuardDecision:
-    entry = _site_state(state, site)
-    previous_tier = str(entry.get("last_outcome_tier") or "")
-    previous_code = str(entry.get("last_outcome_code") or "")
-    previous_strikes = int(entry.get("strikes") or 0)
-    was_warmup = _is_warmup_entry(entry)
-    transition = previous_tier != outcome.tier or previous_code != outcome.code
-
-    entry["warmup_active"] = was_warmup
-    if was_warmup and not str(entry.get("warmup_started_utc") or "").strip():
-        entry["warmup_started_utc"] = now.isoformat()
-    entry["last_attempt_utc"] = now.isoformat()
-    entry["last_outcome_tier"] = outcome.tier
-    entry["last_outcome_code"] = outcome.code
-    entry["last_outcome_detail"] = (outcome.detail or "")[:240]
-    blocked_family = _blocked_family_from_outcome(outcome)
-
-    if outcome.tier == "cooling":
-        return GuardDecision(
-            action="skip_due_cooldown",
-            transition=transition,
-            previous_tier=previous_tier,
-            previous_code=previous_code,
-        )
-
-    entry["last_attempt_channel"] = channel_label
-    entry["last_block_family"] = blocked_family
-    entry["last_block_code"] = outcome.code if blocked_family else ""
-
-    if outcome.tier == "healthy":
-        success_streak = int(entry.get("consecutive_successes") or 0) + 1
-        was_problematic = previous_tier in {"suspect", "degraded", "blocked", "cooling"} or previous_strikes > 0
-        entry["consecutive_successes"] = success_streak
-        entry["consecutive_failures"] = 0
-        entry["consecutive_suspect"] = 0
-        entry["consecutive_blocks"] = 0
-        entry["cooldown_until_utc"] = ""
-        entry["cooldown_profile_generation"] = ""
-        entry["last_success_utc"] = now.isoformat()
-        entry["last_valid_channel"] = channel_label
-        entry["last_block_family"] = ""
-        entry["last_block_code"] = ""
-        entry["probe_after_utc"] = ""
-        entry["probe_attempts"] = 0
-        warmup_failures = int(entry.get("warmup_failures") or 0)
-        if was_warmup:
-            entry["warmup_last_failures"] = warmup_failures
-        entry["warmup_failures"] = 0
-        if was_warmup:
-            entry["warmup_active"] = False
-            entry["warmup_completed_utc"] = now.isoformat()
-        entry["strikes"] = 0 if success_streak >= 2 else max(0, previous_strikes - 1)
-        if was_problematic:
-            entry["last_recovery_utc"] = now.isoformat()
-        return GuardDecision(
-            action=(
-                "warmup_recovered"
-                if was_warmup and was_problematic
-                else "warmup_exit_success"
-                if was_warmup
-                else "recovered"
-                if was_problematic
-                else "healthy"
-            ),
-            transition=transition,
-            recovered=was_problematic,
-            previous_tier=previous_tier,
-            previous_code=previous_code,
-        )
-
-    entry["consecutive_successes"] = 0
-    entry["consecutive_failures"] = int(entry.get("consecutive_failures") or 0) + 1
-    entry["last_reason"] = outcome.code
-    if was_warmup:
-        entry["warmup_failures"] = int(entry.get("warmup_failures") or 0) + 1
-
-    if outcome.tier == "blocked":
-        blocks = int(entry.get("consecutive_blocks") or 0) + 1
-        entry["consecutive_blocks"] = blocks
-        entry["consecutive_suspect"] = 0
-        cooldown_generation = _profile_generation(entry)
-        if blocked_family == "hard_block" and site in _HARD_BLOCK_PROFILE_RESET_SITES:
-            previous_generation, _ = _rotate_site_profile(
-                entry,
-                now=now,
-                reason=f"hard_block:{outcome.code or 'hard_block'}",
-            )
-            cooldown_generation = previous_generation
-        if was_warmup and int(entry.get("warmup_failures") or 0) <= 1:
-            entry["strikes"] = 0
-            entry["cooldown_until_utc"] = ""
-            entry["cooldown_profile_generation"] = ""
-            return GuardDecision(
-                action="warmup_observe_blocked",
-                transition=transition,
-                previous_tier=previous_tier,
-                previous_code=previous_code,
-            )
-        strikes = previous_strikes + 1 if not was_warmup else max(1, previous_strikes + 1)
-        if was_warmup:
-            cooldown = min(max_sec, max(120, base_sec // 3) * min(3, strikes))
-            action = "warmup_cooldown_block"
-        else:
-            cooldown = min(max_sec, base_sec * (2 ** max(0, strikes - 1)))
-            action = "apply_cooldown_block"
-        entry["strikes"] = strikes
-        entry["cooldown_until_utc"] = (now + timedelta(seconds=cooldown)).isoformat()
-        entry["cooldown_profile_generation"] = cooldown_generation
-        if blocked_family == "interstitial":
-            probe_delay = _interstitial_probe_delay_sec(base_sec=base_sec, cooldown_sec=cooldown)
-            entry["probe_after_utc"] = (now + timedelta(seconds=probe_delay)).isoformat() if probe_delay > 0 else ""
-            entry["probe_attempts"] = 0
-        else:
-            entry["probe_after_utc"] = ""
-            entry["probe_attempts"] = 0
-        return GuardDecision(
-            action=action,
-            cooldown_sec=cooldown,
-            transition=transition,
-            previous_tier=previous_tier,
-            previous_code=previous_code,
-        )
-
-    entry["consecutive_blocks"] = 0
-    if outcome.tier == "suspect":
-        suspect_streak = int(entry.get("consecutive_suspect") or 0) + 1
-        entry["consecutive_suspect"] = suspect_streak
-        if suspect_streak >= 2:
-            if was_warmup:
-                cooldown = min(max_sec, max(60, base_sec // 4) * min(3, suspect_streak - 1))
-                action = "warmup_cooldown_suspect"
-            else:
-                cooldown = min(max_sec, max(90, base_sec // 3) * min(3, suspect_streak - 1))
-                action = "apply_cooldown_suspect"
-            entry["strikes"] = max(previous_strikes, 1)
-            entry["cooldown_until_utc"] = (now + timedelta(seconds=cooldown)).isoformat()
-            entry["cooldown_profile_generation"] = _profile_generation(entry)
-            return GuardDecision(
-                action=action,
-                cooldown_sec=cooldown,
-                transition=transition,
-                previous_tier=previous_tier,
-                previous_code=previous_code,
-            )
-        return GuardDecision(
-            action="warmup_observe_suspect" if was_warmup else "observe_suspect",
-            transition=transition,
-            previous_tier=previous_tier,
-            previous_code=previous_code,
-        )
-
-    entry["consecutive_suspect"] = 0
-    if outcome.code in {"timeout_network", "network_issue", "unexpected_error"} and int(entry.get("consecutive_failures") or 0) >= 2:
-        if was_warmup:
-            cooldown = min(max_sec, max(90, base_sec // 5) * min(3, int(entry.get("consecutive_failures") or 0) - 1))
-            action = "warmup_cooldown_degraded"
-        else:
-            cooldown = min(max_sec, max(120, base_sec // 4) * min(3, int(entry.get("consecutive_failures") or 0) - 1))
-            action = "apply_cooldown_degraded"
-        entry["strikes"] = max(previous_strikes, 1)
-        entry["cooldown_until_utc"] = (now + timedelta(seconds=cooldown)).isoformat()
-        entry["cooldown_profile_generation"] = _profile_generation(entry)
-        return GuardDecision(
-            action=action,
-            cooldown_sec=cooldown,
-            transition=transition,
-            previous_tier=previous_tier,
-            previous_code=previous_code,
-        )
-    return GuardDecision(
-        action="warmup_observe_degraded" if was_warmup else "observe_degraded",
-        transition=transition,
-        previous_tier=previous_tier,
-        previous_code=previous_code,
+    return guard_state_machine.apply_guard_outcome(
+        decision_cls=GuardDecision,
+        state=state,
+        site=site,
+        outcome=outcome,
+        now=now,
+        base_sec=base_sec,
+        max_sec=max_sec,
+        channel_label=channel_label,
+        site_state=_site_state,
+        profile_generation=_profile_generation,
+        rotate_site_profile=_rotate_site_profile,
+        is_warmup_entry=_is_warmup_entry,
+        blocked_family_from_outcome=_blocked_family_from_outcome,
+        interstitial_probe_delay_sec=_interstitial_probe_delay_sec,
+        hard_block_profile_reset_sites=_HARD_BLOCK_PROFILE_RESET_SITES,
     )
 
 
@@ -1830,97 +1625,54 @@ def _log_guard_decision(
     return snapshot
 
 
+def _site_policy(site: str) -> object:
+    return get_session_policy(site)
+
+
 def _channel_candidates(*, requested_channel: str | None) -> list[str | None]:
     return [requested_channel]
 
 
-async def apply_interaction_pacing(*, logger=None, reason: str = "interaction") -> float:
-    delay_sec = max(0.0, random.gammavariate(_INTERACTION_PACING_GAMMA_SHAPE, _INTERACTION_PACING_GAMMA_SCALE))
-    if logger is not None:
-        logger.debug(
-            "Interaction pacing scheduled. reason=%s delay_sec=%.3f shape=%s scale=%s",
-            reason,
-            delay_sec,
-            _INTERACTION_PACING_GAMMA_SHAPE,
-            _INTERACTION_PACING_GAMMA_SCALE,
-        )
-    await asyncio.sleep(delay_sec)
-    if logger is not None:
-        logger.debug(
-            "Interaction pacing completed. reason=%s delay_sec=%.3f",
-            reason,
-            delay_sec,
-        )
-    return delay_sec
+async def apply_interaction_pacing(
+    *,
+    logger=None,
+    reason: str = "interaction",
+    site: str = "immobiliare",
+    clip_min_sec: float | None = None,
+    clip_max_sec: float | None = None,
+) -> float:
+    return await browser_bootstrap.apply_interaction_pacing(
+        logger=logger,
+        reason=reason,
+        policy=_site_policy(site),
+        clip_min_sec=clip_min_sec,
+        clip_max_sec=clip_max_sec,
+        random_module=random,
+        sleep_func=asyncio.sleep,
+    )
 
 
-async def bootstrap_static_resources_cache(context, *, logger) -> None:
-    bootstrap_page = None
-    warmed_count = 0
-    try:
-        logger.info(
-            "Static resource bootstrap start. endpoints=%s timeout_ms=%s",
-            len(_STATIC_RESOURCE_BOOTSTRAP_URLS),
-            _STATIC_RESOURCE_BOOTSTRAP_TIMEOUT_MS,
-        )
-        bootstrap_page = await context.new_page()
-        for url in _STATIC_RESOURCE_BOOTSTRAP_URLS:
-            try:
-                logger.debug("Static resource bootstrap warm-up start. url=%s", url)
-                await apply_interaction_pacing(logger=logger, reason=f"bootstrap_static_resources_cache:{url}")
-                await bootstrap_page.goto(
-                    url,
-                    wait_until="commit",
-                    timeout=_STATIC_RESOURCE_BOOTSTRAP_TIMEOUT_MS,
-                )
-                warmed_count += 1
-                logger.debug("Static resource bootstrap warm-up completed. url=%s", url)
-            except Exception as exc:
-                logger.debug(
-                    "Static resource bootstrap skipped endpoint. url=%s error=%s",
-                    url,
-                    type(exc).__name__,
-                )
-        logger.info(
-            "Static resource bootstrap completed. warmed=%s total=%s",
-            warmed_count,
-            len(_STATIC_RESOURCE_BOOTSTRAP_URLS),
-        )
-    finally:
-        if bootstrap_page is not None:
-            try:
-                await bootstrap_page.close()
-                logger.debug("Static resource bootstrap page closed.")
-            except Exception:
-                pass
+async def bootstrap_static_resources_cache(context, *, logger, site: str = "immobiliare") -> None:
+    await browser_bootstrap.bootstrap_static_resources_cache(
+        context,
+        logger=logger,
+        policy=_site_policy(site),
+        pacing_func=apply_interaction_pacing,
+    )
 
 
-async def _close_browser_handles(*, context, browser, logger=None) -> None:
-    if context is not None:
-        try:
-            await apply_interaction_pacing(logger=logger, reason="close_browser_handles:context")
-            await context.close()
-            if logger is not None:
-                logger.debug("Browser context closed.")
-        except Exception as exc:
-            if logger is not None:
-                logger.debug("Browser context close skipped. error=%s", type(exc).__name__)
-            pass
-    if browser is not None:
-        try:
-            await apply_interaction_pacing(logger=logger, reason="close_browser_handles:browser")
-            await browser.close()
-            if logger is not None:
-                logger.debug("Browser instance closed.")
-        except Exception as exc:
-            if logger is not None:
-                logger.debug("Browser instance close skipped. error=%s", type(exc).__name__)
-            pass
+async def _close_browser_handles(*, context, browser, logger=None, site: str = "immobiliare") -> None:
+    await browser_factory.close_browser_handles(
+        context=context,
+        browser=browser,
+        logger=logger,
+        policy=_site_policy(site),
+        pacing_func=apply_interaction_pacing,
+    )
 
 
 async def _close_browser_slots(slots: dict[str, BrowserSessionSlot]) -> None:
-    for slot in slots.values():
-        await _close_browser_handles(context=slot.context, browser=slot.browser)
+    await browser_factory.close_browser_slots(slots, policy_by_site=_site_policy, pacing_func=apply_interaction_pacing)
 
 
 async def _ensure_service_runtime(runtime: LiveFetchServiceRuntime):
@@ -1965,14 +1717,13 @@ async def _prune_site_session_slots(
     site: str,
     preserve_owner: str,
 ) -> int:
-    removed = 0
-    for owner_key in _site_slot_keys(slots, site, preserve_owner):
-        slot = slots.pop(owner_key, None)
-        if slot is None:
-            continue
-        await _close_browser_handles(context=slot.context, browser=slot.browser)
-        removed += 1
-    return removed
+    return await browser_factory.prune_site_session_slots(
+        slots,
+        site=site,
+        preserve_owner=preserve_owner,
+        policy_by_site=_site_policy,
+        pacing_func=apply_interaction_pacing,
+    )
 
 
 def _resolve_channel_executable_path(label: str) -> Path | None:
@@ -2033,6 +1784,7 @@ async def _launch_browser_session(
     browser = None
     context = None
     page = None
+    policy = _site_policy(site)
     channel_candidates = _channel_candidates(requested_channel=requested_channel)
     for candidate in channel_candidates:
         channel_label = _channel_to_label(candidate)
@@ -2067,15 +1819,18 @@ async def _launch_browser_session(
                     persistent_profile_dir=p,
                     persona=persona,
                 )
+                launch_persistent_kwargs["user_agent"] = policy.user_agent
                 context = await AsyncNewBrowser(pw, **launch_persistent_kwargs)
                 logger.info(
-                    "Using persistent Camoufox profile. site=%s profile=%s channel=%s generation=%s launcher=%s persona=%s screen=%sx%s window=%sx%s humanize_max_sec=%s",
+                    "Launch path acquired fresh identity. site=%s launch_path=fresh policy_site=%s profile=%s channel=%s generation=%s launcher=%s persona=%s user_agent=%s screen=%sx%s window=%sx%s humanize_max_sec=%s",
                     site,
+                    policy.site,
                     p,
                     channel_label,
                     profile_generation,
                     "camoufox_path" if executable_path is not None else "camoufox_default",
                     persona.persona_id,
+                    policy.user_agent,
                     persona.screen_width,
                     persona.screen_height,
                     persona.window_width,
@@ -2088,22 +1843,27 @@ async def _launch_browser_session(
                     executable_path=executable_path,
                 )
                 browser = await AsyncNewBrowser(pw, **launch_kwargs)
-                context = await browser.new_context()
+                try:
+                    context = await browser.new_context(user_agent=policy.user_agent)
+                except TypeError:
+                    context = await browser.new_context()
                 logger.info(
-                    "Using ephemeral Camoufox context. site=%s channel=%s launcher=%s",
+                    "Launch path acquired fresh identity. site=%s launch_path=fresh policy_site=%s channel=%s launcher=%s user_agent=%s",
                     site,
+                    policy.site,
                     channel_label,
                     "camoufox_path" if executable_path is not None else "camoufox_default",
+                    policy.user_agent,
                 )
-            await install_render_context_init_script(context, logger=logger)
-            await bootstrap_static_resources_cache(context, logger=logger)
+            await install_render_context_init_script(context, hardware=policy.hardware, logger=logger)
+            await bootstrap_static_resources_cache(context, logger=logger, site=site)
             page = context.pages[0] if context.pages else await context.new_page()
-            logger.debug(
-                "Browser session launch prepared page. site=%s channel=%s bootstrap_completed=%s pages=%s",
+            logger.info(
+                "Launch path prepared page. site=%s channel=%s pages=%s bootstrap_completed=%s",
                 site,
                 channel_label,
-                True,
                 len(context.pages),
+                True,
             )
             return browser, context, page, channel_label
         except Exception as exc:
@@ -2123,7 +1883,7 @@ async def _launch_browser_session(
                     channel_label,
                     details.splitlines()[0] if details else repr(exc),
                 )
-            await _close_browser_handles(context=context, browser=browser, logger=logger)
+            await _close_browser_handles(context=context, browser=browser, logger=logger, site=site)
             context = None
             browser = None
             page = None
@@ -2256,9 +2016,9 @@ def _sanitize_search_url(url: str) -> str:
         return raw
     split = urlsplit(raw)
     host = (split.hostname or "").lower()
-    blocked_params = {"dtcookie"}
+    blocked_params = set(immobiliare_site.SEARCH_PARAM_BLOCKLIST)
     if "idealista.it" in host:
-        blocked_params |= {"xtor", "xts"}
+        blocked_params = set(idealista_site.SEARCH_PARAM_BLOCKLIST)
     if not split.query:
         return raw
     query = []
@@ -2278,17 +2038,11 @@ def _extract_cards_from_html_fallback(
     max_per_site: int,
 ) -> list[dict]:
     if site == "immobiliare":
-        patterns = [
-            r"https://www\.immobiliare\.it/annunci/\d+/?",
-            r"/annunci/\d+/?",
-        ]
-        base = "https://www.immobiliare.it"
+        patterns = immobiliare_site.LISTING_PATTERNS
+        base = immobiliare_site.BASE_URL
     else:
-        patterns = [
-            r"https://www\.idealista\.it/immobile/\d+/?",
-            r"/immobile/\d+/?",
-        ]
-        base = "https://www.idealista.it"
+        patterns = idealista_site.LISTING_PATTERNS
+        base = idealista_site.BASE_URL
 
     seen: set[str] = set()
     urls: list[str] = []
@@ -2324,7 +2078,7 @@ def _extract_cards_from_html_fallback(
     return out
 
 
-async def _accept_cookies_if_present(page, *, logger=None) -> None:
+async def _accept_cookies_if_present(page, *, site: str, logger=None) -> None:
     selectors = [
         "button#onetrust-accept-btn-handler",
         'button[id*="onetrust-accept"]',
@@ -2335,7 +2089,7 @@ async def _accept_cookies_if_present(page, *, logger=None) -> None:
         try:
             node = page.locator(selector)
             if await node.count() > 0:
-                await apply_interaction_pacing(logger=logger, reason=f"accept_cookies:selector:{selector}")
+                await apply_interaction_pacing(logger=logger, reason=f"accept_cookies:selector:{selector}", site=site)
                 await node.first.click(timeout=1200)
                 if logger is not None:
                     logger.debug("Accepted cookies via selector. selector=%s", selector)
@@ -2348,7 +2102,7 @@ async def _accept_cookies_if_present(page, *, logger=None) -> None:
         try:
             btn = page.get_by_role("button", name=label)
             if await btn.count() > 0:
-                await apply_interaction_pacing(logger=logger, reason=f"accept_cookies:label:{label}")
+                await apply_interaction_pacing(logger=logger, reason=f"accept_cookies:label:{label}", site=site)
                 await btn.first.click(timeout=1200)
                 if logger is not None:
                     logger.debug("Accepted cookies via label. label=%s", label)
@@ -2383,7 +2137,7 @@ async def _dismiss_intrusive_popups(page, *, site: str, logger) -> None:
                 node = nodes.nth(idx)
                 if not await node.is_visible():
                     continue
-                await apply_interaction_pacing(logger=logger, reason=f"dismiss_intrusive_popups:selector:{selector}")
+                await apply_interaction_pacing(logger=logger, reason=f"dismiss_intrusive_popups:selector:{selector}", site=site)
                 await node.click(timeout=700)
                 await page.wait_for_timeout(180)
                 dismissed += 1
@@ -2403,7 +2157,7 @@ async def _dismiss_intrusive_popups(page, *, site: str, logger) -> None:
         try:
             btn = page.get_by_role("button", name=label)
             if await btn.count() > 0 and await btn.first.is_visible():
-                await apply_interaction_pacing(logger=logger, reason=f"dismiss_intrusive_popups:label:{label}")
+                await apply_interaction_pacing(logger=logger, reason=f"dismiss_intrusive_popups:label:{label}", site=site)
                 await btn.first.click(timeout=700)
                 await page.wait_for_timeout(180)
                 dismissed += 1
@@ -2713,9 +2467,9 @@ async def _gentle_scroll(page, steps: int, delay_ms: int, selectors: list[str] |
 async def _prepare_site_view(page, site: str, nav_timeout_ms: int, logger) -> None:
     if site == "immobiliare":
         try:
-            btn = await page.query_selector('[data-cy="switch-to-list"], button[aria-controls*="results-list"]')
+            btn = await page.query_selector(", ".join(immobiliare_site.LIST_SWITCH_SELECTORS))
             if btn:
-                await apply_interaction_pacing(logger=logger, reason="prepare_site_view:immobiliare_switch_to_list")
+                await apply_interaction_pacing(logger=logger, reason="prepare_site_view:immobiliare_switch_to_list", site=site)
                 await btn.click(timeout=1500)
                 logger.debug("Applied immobiliare list switch before extraction.")
                 await page.wait_for_load_state("domcontentloaded", timeout=nav_timeout_ms)
@@ -2724,31 +2478,19 @@ async def _prepare_site_view(page, site: str, nav_timeout_ms: int, logger) -> No
             logger.debug("List switch not applied for immobiliare.")
         await _wait_for_any_selector(
             page,
-            [
-                'ul[data-cy="search-layout-list"] li',
-                'article[data-cy="listing-item"]',
-                'a[href*="/annunci/"]',
-            ],
+            list(immobiliare_site.PREPARE_WAIT_SELECTORS),
             timeout_ms=min(15000, nav_timeout_ms),
         )
         await _gentle_scroll(
             page,
             steps=4,
             delay_ms=260,
-            selectors=[
-                'ul[data-cy="search-layout-list"]',
-                '[data-cy="search-layout-list"]',
-                'section[data-cy="results-list"]',
-            ],
+            selectors=list(immobiliare_site.SCROLL_SELECTORS),
         )
     elif site == "idealista":
         await _wait_for_any_selector(
             page,
-            [
-                'a[itemprop="url"]',
-                'a[href*="/immobile/"]',
-                "article",
-            ],
+            list(idealista_site.PREPARE_WAIT_SELECTORS),
             timeout_ms=min(15000, nav_timeout_ms),
         )
         await _gentle_scroll(page, steps=5, delay_ms=260)
@@ -3029,11 +2771,12 @@ async def _verify_idealista_private_only_candidates(
             await apply_interaction_pacing(
                 logger=logger,
                 reason=f"idealista_private_only_detail_verification:goto:{card.get('ad_id') or index}",
+                site="idealista",
             )
             await page.goto(card["url"], timeout=nav_timeout_ms)
             await page.wait_for_load_state("domcontentloaded", timeout=nav_timeout_ms)
             await page.wait_for_timeout(random.randint(*_IDEALISTA_PRIVATE_ONLY_DETAIL_DELAY_MS))
-            await _accept_cookies_if_present(page, logger=logger)
+            await _accept_cookies_if_present(page, site="idealista", logger=logger)
             await _dismiss_intrusive_popups(page, site="idealista", logger=logger)
 
             html = await page.content()
@@ -3048,9 +2791,7 @@ async def _verify_idealista_private_only_candidates(
                 )
                 break
 
-            professional_profile_links = await page.locator(
-                'aside a[href*="/pro/"], [role="complementary"] a[href*="/pro/"], nav a[href*="/pro/"]'
-            ).count()
+            professional_profile_links = await page.locator(idealista_site.DETAIL_PRO_LINK_SELECTOR).count()
             body_text = await page.locator("body").inner_text()
             attempted += 1
             publisher_kind = _classify_idealista_publisher_kind_from_signals(
@@ -3167,18 +2908,19 @@ async def _extract_for_url(
 ) -> tuple[list[dict], FetchOutcome, FetchAttemptStats]:
     attempt_stats = FetchAttemptStats()
     request_url = _sanitize_search_url(search_url)
+    host = (urlparse(search_url).hostname or "").lower()
+    site = "idealista" if "idealista.it" in host else "immobiliare"
     if request_url != search_url:
         logger.info("Sanitized search URL for navigation. host=%s", (urlparse(search_url).hostname or "").lower())
-    await apply_interaction_pacing(logger=logger, reason=f"extract_for_url:goto:{request_url}")
+    await apply_interaction_pacing(logger=logger, reason=f"extract_for_url:goto:{request_url}", site=site)
     response = await page.goto(request_url, timeout=nav_timeout_ms)
     response_status = response.status if response is not None else 0
     await page.wait_for_load_state("domcontentloaded", timeout=nav_timeout_ms)
     await page.wait_for_timeout(wait_after_goto_ms)
-    await _accept_cookies_if_present(page, logger=logger)
+    await _accept_cookies_if_present(page, site=site, logger=logger)
     selector_primary_count = 0
     selector_alt_count = 0
 
-    host = (urlparse(search_url).hostname or "").lower()
     if "immobiliare.it" in host:
         selector = (
             'ul[data-cy="search-layout-list"] a[href*="/annunci/"], '
@@ -3193,7 +2935,7 @@ async def _extract_for_url(
         site = "idealista"
     else:
         logger.warning("Unsupported host, skipped url=%s", search_url)
-        return [], FetchOutcome(tier="degraded", code="unsupported_site", http_status=response_status, detail=search_url), attempt_stats
+        return [], FetchOutcome(tier="degraded", code="unsupported_site", http_status=0, detail=search_url), attempt_stats
 
     await _dismiss_intrusive_popups(page, site=site, logger=logger)
     html = await page.content()
@@ -3682,10 +3424,21 @@ async def fetch_live_once(
                                 url,
                             )
                     if site_guard_enabled and jitter_max > 0:
-                        delay = random.uniform(jitter_min, jitter_max)
+                        delay = await apply_interaction_pacing(
+                            logger=logger,
+                            reason="site_guard_launch_delay",
+                            site=site,
+                            clip_min_sec=jitter_min,
+                            clip_max_sec=jitter_max,
+                        )
                         if delay > 0:
-                            logger.info("Site guard jitter delay. site=%s delay_sec=%.2f", site, delay)
-                            await asyncio.sleep(delay)
+                            logger.info(
+                                "Site guard launch pacing. site=%s delay_sec=%.2f clip_min_sec=%s clip_max_sec=%s",
+                                site,
+                                delay,
+                                jitter_min,
+                                jitter_max,
+                            )
 
                     slot = session_slots.get(preferred_session_owner)
                     if slot is None:
@@ -3764,7 +3517,7 @@ async def fetch_live_once(
                             cross_site_session_reuse_count += 1
                         active_session_owner = slot.owner_key
                         logger.info(
-                            "Reusing isolated site session. site=%s channel=%s owner=%s slot_reuse_count=%s same_site_profile_reuse_count=%s cross_site_session_reuse_count=%s",
+                            "Launch path reused mature identity. site=%s launch_path=reused channel=%s owner=%s slot_reuse_count=%s same_site_profile_reuse_count=%s cross_site_session_reuse_count=%s",
                             site,
                             selected_channel_label,
                             active_session_owner,
@@ -3895,6 +3648,15 @@ async def fetch_live_once(
                         )
                         _save_guard_state(guard_state_path, guard_state)
                         entry = _site_state(guard_state, site)
+                        site_session_replace_count += await _dispose_blocked_profile_if_needed(
+                            decision=decision,
+                            session_slots=session_slots,
+                            profile_dir=profile_dir,
+                            site=site,
+                            channel_label=selected_channel_label or _DEFAULT_BROWSER_LABEL,
+                            entry=entry,
+                            logger=logger,
+                        )
                         if metrics is not None:
                             _store_extraction_metrics(entry=entry, metrics=metrics)
                             _save_guard_state(guard_state_path, guard_state)
@@ -4015,20 +3777,30 @@ async def fetch_live_once(
                             channel_label=selected_channel_label or _DEFAULT_BROWSER_LABEL,
                         )
                         _save_guard_state(guard_state_path, guard_state)
+                        entry = _site_state(guard_state, site)
+                        site_session_replace_count += await _dispose_blocked_profile_if_needed(
+                            decision=decision,
+                            session_slots=session_slots,
+                            profile_dir=profile_dir,
+                            site=site,
+                            channel_label=selected_channel_label or _DEFAULT_BROWSER_LABEL,
+                            entry=entry,
+                            logger=logger,
+                        )
                         snapshot = _log_guard_decision(
                             logger=logger,
                             site=site,
                             url=url,
                             outcome=outcome,
                             decision=decision,
-                            entry=_site_state(guard_state, site),
+                            entry=entry,
                             browser_mode=browser_mode,
                             identity_switch=identity_switch_count,
                             manual_assist_used=manual_assist_used,
                             assist_entry_mode=assist_entry_mode,
                         )
                         previous_state, _ = _advance_run_state(
-                            entry=_site_state(guard_state, site),
+                            entry=entry,
                             outcome=outcome,
                             decision=decision,
                             run_risk=run_risk,
@@ -4045,17 +3817,17 @@ async def fetch_live_once(
                                 debug_dir=debug_path,
                                 site=site,
                                 event=f"{outcome.tier}_{outcome.code}",
-                                payload={
-                                    "site": site,
-                                    "url": url,
-                                    "outcome": asdict(outcome),
-                                    "decision": asdict(decision),
-                                    "state": dict(_site_state(guard_state, site)),
-                                    "telemetry": asdict(snapshot),
-                                    "run_risk": asdict(run_risk),
-                                },
-                                logger=logger,
-                            )
+                                        payload={
+                                            "site": site,
+                                            "url": url,
+                                            "outcome": asdict(outcome),
+                                            "decision": asdict(decision),
+                                            "state": dict(entry),
+                                            "telemetry": asdict(snapshot),
+                                            "run_risk": asdict(run_risk),
+                                        },
+                                        logger=logger,
+                                    )
                         if _consume_cooldown_budget(
                             outcome=outcome,
                             decision=decision,
@@ -4094,20 +3866,30 @@ async def fetch_live_once(
                             channel_label=selected_channel_label or _DEFAULT_BROWSER_LABEL,
                         )
                         _save_guard_state(guard_state_path, guard_state)
+                        entry = _site_state(guard_state, site)
+                        site_session_replace_count += await _dispose_blocked_profile_if_needed(
+                            decision=decision,
+                            session_slots=session_slots,
+                            profile_dir=profile_dir,
+                            site=site,
+                            channel_label=selected_channel_label or _DEFAULT_BROWSER_LABEL,
+                            entry=entry,
+                            logger=logger,
+                        )
                         snapshot = _log_guard_decision(
                             logger=logger,
                             site=site,
                             url=url,
                             outcome=outcome,
                             decision=decision,
-                            entry=_site_state(guard_state, site),
+                            entry=entry,
                             browser_mode=browser_mode,
                             identity_switch=identity_switch_count,
                             manual_assist_used=manual_assist_used,
                             assist_entry_mode=assist_entry_mode,
                         )
                         previous_state, _ = _advance_run_state(
-                            entry=_site_state(guard_state, site),
+                            entry=entry,
                             outcome=outcome,
                             decision=decision,
                             run_risk=run_risk,
@@ -4124,17 +3906,17 @@ async def fetch_live_once(
                                 debug_dir=debug_path,
                                 site=site,
                                 event=f"{outcome.tier}_{outcome.code}",
-                                payload={
-                                    "site": site,
-                                    "url": url,
-                                    "outcome": asdict(outcome),
-                                    "decision": asdict(decision),
-                                    "state": dict(_site_state(guard_state, site)),
-                                    "telemetry": asdict(snapshot),
-                                    "run_risk": asdict(run_risk),
-                                },
-                                logger=logger,
-                            )
+                                        payload={
+                                            "site": site,
+                                            "url": url,
+                                            "outcome": asdict(outcome),
+                                            "decision": asdict(decision),
+                                            "state": dict(entry),
+                                            "telemetry": asdict(snapshot),
+                                            "run_risk": asdict(run_risk),
+                                        },
+                                        logger=logger,
+                                    )
                         if _consume_cooldown_budget(
                             outcome=outcome,
                             decision=decision,
@@ -4174,20 +3956,30 @@ async def fetch_live_once(
                             channel_label=selected_channel_label or _DEFAULT_BROWSER_LABEL,
                         )
                         _save_guard_state(guard_state_path, guard_state)
+                        entry = _site_state(guard_state, site)
+                        site_session_replace_count += await _dispose_blocked_profile_if_needed(
+                            decision=decision,
+                            session_slots=session_slots,
+                            profile_dir=profile_dir,
+                            site=site,
+                            channel_label=selected_channel_label or _DEFAULT_BROWSER_LABEL,
+                            entry=entry,
+                            logger=logger,
+                        )
                         snapshot = _log_guard_decision(
                             logger=logger,
                             site=site,
                             url=url,
                             outcome=outcome,
                             decision=decision,
-                            entry=_site_state(guard_state, site),
+                            entry=entry,
                             browser_mode=browser_mode,
                             identity_switch=identity_switch_count,
                             manual_assist_used=manual_assist_used,
                             assist_entry_mode=assist_entry_mode,
                         )
                         previous_state, _ = _advance_run_state(
-                            entry=_site_state(guard_state, site),
+                            entry=entry,
                             outcome=outcome,
                             decision=decision,
                             run_risk=run_risk,
@@ -4204,17 +3996,17 @@ async def fetch_live_once(
                                 debug_dir=debug_path,
                                 site=site,
                                 event=f"{outcome.tier}_{outcome.code}",
-                                payload={
-                                    "site": site,
-                                    "url": url,
-                                    "outcome": asdict(outcome),
-                                    "decision": asdict(decision),
-                                    "state": dict(_site_state(guard_state, site)),
-                                    "telemetry": asdict(snapshot),
-                                    "run_risk": asdict(run_risk),
-                                },
-                                logger=logger,
-                            )
+                                        payload={
+                                            "site": site,
+                                            "url": url,
+                                            "outcome": asdict(outcome),
+                                            "decision": asdict(decision),
+                                            "state": dict(entry),
+                                            "telemetry": asdict(snapshot),
+                                            "run_risk": asdict(run_risk),
+                                        },
+                                        logger=logger,
+                                    )
                         if _consume_cooldown_budget(
                             outcome=outcome,
                             decision=decision,
@@ -4236,7 +4028,7 @@ async def fetch_live_once(
             if local_playwright and session_slots:
                 await _close_browser_slots(session_slots)
             elif local_playwright:
-                await _close_browser_handles(context=context, browser=browser)
+                await _close_browser_handles(context=context, browser=browser, site=active_session_site or "immobiliare")
     finally:
         if local_playwright:
             await pw.stop()

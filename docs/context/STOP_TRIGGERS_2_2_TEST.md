@@ -46,6 +46,16 @@ Quando il rischio sale oltre il budget, il motore deve:
 | `run_state` degradato ripetuto | recycle dello slot del sito | valutare ricreazione del runtime solo se il problema si allarga | `runtime_disposition=recycle_site_slot` |
 | run con degrado su piu siti nello stesso ciclo | `recycle_runtime` | valutare stop del servizio se ricorrente | `runtime_disposition=recycle_runtime` |
 
+## Traduzione attuale del trigger `blocked`
+- nel refactor del `2026-03-30` il ramo `blocked/hard_block` e stato reso esplicito nella state machine tabellare
+- effetto attuale minimo in codice:
+  - cooldown forzato
+  - rotate della `profile_generation`
+  - distruzione del vecchio profilo persistente nella root gestita
+- `interstitial_datadome` resta invece un ramo diverso:
+  - cooldown/probe
+  - nessuna rotate automatica del profilo
+
 ## Runtime disposition
 
 | Caso | Decisione consigliata |

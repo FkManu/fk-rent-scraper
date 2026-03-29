@@ -1,16 +1,18 @@
 # ACTIVE_PATCH.md
 
 ## Patch corrente
-Riallineamento post-patch su stabilita operativa, osservabilita e docs vive:
-- registrato nello storico il nuovo hardening di render context deterministico cross-host
-- registrato il nuovo `adaptive interaction pacing` nel percorso live
-- registrato il nuovo bootstrap tecnico delle static resources nel setup browser
-- aggiunti log dettagliati sui punti critici delle nuove patch
-- review locale completa eseguita sulle patch recenti, inclusa la coerenza con `profile_generation`
-- corretti i markdown che raccontavano ancora il ramo pre-render-context / pre-pacing / pre-bootstrap
+Riallineamento post-refactor su struttura, review e docs vive:
+- review locale completa del refactor `browser/guard/sites`
+- registrazione nello storico della nuova session policy per sito
+- registrazione della state machine tabellare estratta
+- registrazione della disposition esplicita del profilo persistente su `hard_block`
+- chiusura dei drift post-refactor:
+  - `accept_cookies` policy-aware per sito
+  - `guard_jitter_*` reintegrati come clipping del Gamma pacing
+- correzione dei markdown che raccontavano ancora `live_fetch.py` come monolite e il refactor come prossimo step
 
 ## Obiettivo
-Tenere allineata la linea `2.2.1 stable` dopo l'introduzione di render normalization deterministica, pacing adattivo, bootstrap static resources e logging di osservabilita, producendo la nuova dist per validazione VM.
+Tenere allineata la linea `2.2.2 refactorizzata` dopo il refactor strutturale del motore live, fissando nello storico la nuova architettura, la chiusura dei drift e la nuova release.
 
 ## Contesto
 - `2.2_test` deriva da `2.1_stable`, ma oggi e gia divergente nel motore live
@@ -23,32 +25,35 @@ Tenere allineata la linea `2.2.1 stable` dopo l'introduzione di render normaliza
   - `idealista` e `immobiliare` hanno preso un solo `hard_block` ciascuno
   - entrambi hanno recuperato su `gen-001`
   - il fix su `cooldown_profile_generation` ha funzionato
-- le patch del `2026-03-28` hanno aggiunto due layer tecnici nuovi:
-  - render context deterministico via `init_script` globale
-  - pacing asincrono Gamma sulle interazioni Playwright chiave
-- la patch successiva ha aggiunto:
-  - bootstrap tecnico degli endpoint infrastrutturali comuni nel setup del `BrowserContext`
-- la patch finale ha aggiunto:
-  - logging dettagliato sui punti critici dei nuovi helper
-  - riallineamento del bundle Windows a `2.2.1 stable`
+- dopo le patch del `2026-03-28` il ramo e stato rifattorizzato il `2026-03-30`:
+  - `browser/session_policy.py`
+  - `browser/bootstrap.py`
+  - `browser/factory.py`
+  - `guard/state_machine.py`
+  - `sites/idealista.py`
+  - `sites/immobiliare.py`
 - la review ha confermato che:
   - `hard_block` continua a ruotare `profile_generation`
   - `interstitial_datadome` continua a restare cooldown/probe sulla stessa identity
-- il rischio immediato non e il codice, ma lasciare documenti e review fermi al contratto precedente
+  - il vecchio profilo persistente viene ora distrutto in modo esplicito dopo la rotate su `hard_block`
+- i due drift reali emersi nella prima review sono stati corretti nel passo successivo:
+  - pacing cookie riallineato alla policy del sito corrente
+  - `guard_jitter_*` reintegrati come clipping del Gamma pacing
+- il rischio immediato e lasciare documenti e handoff fermi al contratto pre-refactor
 
 ## Scope
 - riallineare doc vive e memoria al nuovo stato del ramo
 - registrare nello storico:
-  - render context deterministico
-  - adaptive interaction pacing
-  - static resources bootstrap
-  - logging di osservabilita sui nuovi path
+  - session policy per sito
+  - state machine tabellare
+  - modularizzazione `browser/guard/sites`
+  - destruction del profilo persistente su `hard_block`
+  - clipping operativo del Gamma pacing tramite `guard_jitter_*`
 - chiudere una review completa di coerenza locale su:
   - `live_fetch.py`
   - `render_context.py`
   - test nuovi
   - note CLI/backend
-- ricostruire la dist Windows `2.2.1 stable` per soak VM
 
 ## Non-scope
 - niente refactor strutturale di `live_fetch.py` prima del soak
@@ -75,11 +80,10 @@ Tenere allineata la linea `2.2.1 stable` dopo l'introduzione di render normaliza
 - `scripts/build_windows_bundle.ps1`
 
 ## Done quando
-- i doc vivi riflettono correttamente le patch del `2026-03-28`
+- i doc vivi riflettono correttamente il refactor del `2026-03-30`
 - la memoria agente riporta:
-  - render context deterministico
-  - adaptive interaction pacing
-  - static resources bootstrap
-  - review locale senza bug bloccanti
-- `cli_test_matrix.md` non menziona piu flag o alias rimossi
-- nuova dist Windows `2.2.1 stable` ricostruita
+  - session policy per sito
+  - state machine tabellare
+  - modularizzazione `browser/guard/sites`
+  - review locale con drift chiusi e suite aggiornata
+- `HANDOFF` e `NEXT_STEPS` non raccontano piu il refactor come lavoro futuro

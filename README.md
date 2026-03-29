@@ -1,9 +1,9 @@
-# Affitto 2.2.1 Stable
+# Affitto 2.2.2 Refactorizzata
 
-La cartella resta `2.2_test`, ma a questo punto va trattata come root di lavoro della release `2.2.1 stable`.
+La cartella resta `2.2_test`, ma a questo punto va trattata come root di lavoro della release `2.2.2 refactorizzata`.
 
 Non e la baseline storica `2.1_stable`.
-`2.1_stable` resta la baseline di provenienza; `2.2_test` contiene la linea che e stata promossa a `2.2.1 stable`.
+`2.1_stable` resta la baseline di provenienza; `2.2_test` contiene la linea che oggi pubblichiamo come `2.2.2 refactorizzata`.
 
 Questa linea esiste per consolidare:
 - `camoufox` come backend operativo del ramo
@@ -27,6 +27,15 @@ Questa linea esiste per consolidare:
   - stessa generazione => stessi parametri di launch principali
 - hardening del `2026-03-28` su osservabilita:
   - log dettagliati su render context init, pacing Gamma, bootstrap static resources e chiusura sessione
+- refactor del `2026-03-30`:
+  - `live_fetch.py` separato in moduli `browser/guard/sites`
+  - session policy per sito
+  - state machine tabellare
+  - launch path `fresh/reused`
+  - destroy del vecchio profilo persistente su `hard_block`
+- fix successivo del `2026-03-30`:
+  - `accept_cookies` policy-aware per sito
+  - `guard_jitter_*` integrati come clipping del Gamma pacing
 - GUI aggiornata con `Modalita debugger` per salvare artifact in `runtime/debug` o `./debug` accanto alla dist
 
 ## Read this first
@@ -67,7 +76,7 @@ python run.py doctor
 I file runtime locali vengono creati sotto `runtime/` e non fanno parte della repo.
 
 ## Browser default
-Il backend live predefinito della linea `2.2.1 stable` e `camoufox`.
+Il backend live predefinito della release `2.2.2 refactorizzata` resta `camoufox`.
 
 Note operative:
 - root profili persistenti di default: `runtime/camoufox-profile`
@@ -77,8 +86,8 @@ Note operative:
 - i profili persistenti sono ora versionati per `site/channel/profile_generation` quando il guard decide di ruotare identita
 - `Milestone 3 / Real Browser Assisted` non e piu una direzione attiva del ramo
 - il prossimo hardening previsto non e multi-browser ma:
-  - validazione soak della nuova identity policy
-  - refactor prudente di `live_fetch.py`
+  - validazione soak VM della release refactorizzata
+  - `immobiliare adaptive prepare`
 
 ## Continuous live mode
 Comando principale di soak:
@@ -120,7 +129,7 @@ Il bundle stable mantiene:
 - GUI -> default `camoufox`
 - CLI companion -> default `camoufox`
 - runtime bundle-aware -> `%LOCALAPPDATA%\AffittoV2\runtime`
-- zip di release corrente -> `dist/affitto_2_2_1_stable_bundle.zip`
+- zip di release corrente -> `dist/affitto_2_2_2_refactorizzata_bundle.zip`
 
 ## Compatibilita
 I comandi applicativi ereditati da `2.1_stable` restano validi.

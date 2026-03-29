@@ -16,6 +16,7 @@ Oggi il ramo ha gia:
 - render context deterministico cross-host
 - adaptive interaction pacing su `goto/click/close`
 - bootstrap static resources cache nel setup del `BrowserContext`
+- refactor strutturale del motore live in moduli `browser/guard/sites`
 
 Per ricostruire il contesto minimo leggere prima:
 1. `docs/risk_scoring_e_griglia_segnali_antibot.md`
@@ -73,18 +74,11 @@ Per ricostruire il contesto minimo leggere prima:
    - mantenere la CLI su `auto|camoufox`
    - non reintrodurre alias legacy o rotazioni multi-browser nel percorso standard
    - non tenere nel core nuovi percorsi "assistiti" che non fanno piu parte della strategia reale
-6. Refactor prudente di `live_fetch.py`:
-   - evitare rewrite ampia
-   - estrarre prima moduli meccanici e a basso rischio:
-     - `profile_identity.py`
-     - `browser_runtime.py`
-     - `site_guard.py`
-     - `debug_artifacts.py`
-   - lasciare il loop orchestrativo principale in `live_fetch.py` finche i soak non restano stabili
-   - mantenere invariati:
-     - shape dei log
-     - contract del run report
-     - comportamento dei parser sito
+6. Riallineamento post-refactor:
+   - eseguire il soak VM della release `2.2.2 refactorizzata`
+   - verificare che il launch path `fresh/reused` resti leggibile nei soak lunghi
+   - verificare in log i casi `Interaction pacing clipped`
+   - consolidare il ruolo dei moduli nuovi senza riaprire un rewrite ampia
 7. Orchestrazione 24/7:
    - promuovere il soak del `2026-03-26` a baseline comparativa del ramo
    - validare se i recycle locali periodici su `immobiliare` restano necessari dopo la nuova rotazione profilo
@@ -163,9 +157,14 @@ Se non fa nessuna di queste cose, probabilmente non appartiene a questa root.
   - render context deterministico cross-host
   - pacing adattivo sulle interazioni chiave
   - bootstrap static resources cache nel setup sessione
+  - separazione strutturale tra:
+    - policy browser
+    - bootstrap/close runtime
+    - state machine del guard
+    - costanti/helper per sito
 - coperto solo in parte:
   - precisione forte del filtro `private_only`
-  - refactor di `live_fetch.py` in moduli piu piccoli
+  - riallineamento completo dei contratti residui intorno ai moduli nuovi
 - non ancora coperto:
   - segnali rete/TLS
   - JS runtime / device checks come osservabilita dedicata

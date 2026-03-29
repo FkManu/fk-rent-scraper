@@ -3,7 +3,7 @@
 Agisci sul progetto `affitto` nella root `2.2_test`.
 
 ## Task
-Mantieni `2.2_test` allineata alla release `2.2 stable`.
+Mantieni `2.2_test` allineata alla release `2.2.2 refactorizzata`.
 
 ## Contesto
 - `2.2_test` e la linea di laboratorio derivata da `2.1_stable`
@@ -26,7 +26,7 @@ Chiudere e mantenere una stable coerente su tre assi:
 5. mantenere il binding corretto tra cooldown e `profile_generation`
 6. mantenere leggibili nei log `Profile identity rotated`, `profile_generation`, `profile_age_sec`, `cooldown_generation`
 7. mantenere GUI e CLI allineate sul contratto live corrente
-8. ricostruire la dist stable e validarla nel prossimo soak prima di aprire il refactor di `live_fetch.py`
+8. ricostruire la dist `2.2.2 refactorizzata` e validarla nel prossimo soak VM
 
 ## Vincoli
 - niente CDP in questa patch

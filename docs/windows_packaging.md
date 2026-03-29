@@ -1,4 +1,4 @@
-# Windows packaging - `2.2 stable`
+# Windows packaging - `2.2.2 refactorizzata`
 
 ## Strategia scelta
 
@@ -67,7 +67,7 @@ Output atteso:
 
 - `dist\affitto_gui\affitto_gui.exe`
 - `dist\affitto_gui\affitto_cli.exe`
-- `dist\affitto_2_2_stable_bundle.zip`
+- `dist\affitto_2_2_2_refactorizzata_bundle.zip`
 
 Nota stable:
 - la dist resta un artefatto locale di build e non va committata in repo
@@ -104,7 +104,7 @@ $env:AFFITTO_V2_RUNTIME_DIR = "$env:TEMP\\affitto-bundle-runtime"
 Per distribuire la build stable:
 
 ```powershell
-Expand-Archive -Path .\dist\affitto_2_2_stable_bundle.zip -DestinationPath "$env:TEMP\\affitto-stable"
+Expand-Archive -Path .\dist\affitto_2_2_2_refactorizzata_bundle.zip -DestinationPath "$env:TEMP\\affitto-refactorizzata"
 ```
 
 ## Stato verificato nella fase corrente

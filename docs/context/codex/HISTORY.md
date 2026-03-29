@@ -221,3 +221,32 @@
   - `scripts/build_windows_bundle.ps1` riallineato all'artefatto `dist/affitto_2_2_1_stable_bundle.zip`
   - suite locale confermata a `81` test `OK`
   - release target aggiornata a `2.2.1 stable`
+- refactor strutturale del `2026-03-30` su Separation of Concerns del motore live:
+  - creati i moduli:
+    - `src/affitto_v2/scrapers/browser/session_policy.py`
+    - `src/affitto_v2/scrapers/browser/bootstrap.py`
+    - `src/affitto_v2/scrapers/browser/factory.py`
+    - `src/affitto_v2/scrapers/guard/state_machine.py`
+    - `src/affitto_v2/scrapers/sites/idealista.py`
+    - `src/affitto_v2/scrapers/sites/immobiliare.py`
+  - `render_context.py` reso policy-driven:
+    - script generato dalla hardware signature di sessione
+    - `user_agent` incluso nella firma hardware del bootstrap identita
+  - `live_fetch.py` ridotto a orchestratore:
+    - policy per sito
+    - launch path esplicito `fresh` vs `reused`
+    - bootstrap e close delegati ai moduli browser
+    - state transition delegate al modulo guard
+  - `hard_block` ora applica anche disposition esplicita del vecchio profilo persistente:
+    - prune slot sito
+    - distruzione sicura del profilo sotto la root gestita
+  - copertura aggiornata con nuovo test:
+    - `tests/test_session_policy_and_state_machine.py`
+  - suite locale aggiornata a `84` test `OK`
+- fix successivo del `2026-03-30` sui drift post-refactor:
+  - `_accept_cookies_if_present()` reso site-aware e riallineato alla `SessionPolicy`
+  - `guard_jitter_min_sec` e `guard_jitter_max_sec` reintegrati come clipping del Gamma pacing
+  - logging del launch path esteso per marcare quando il pacing viene `clipped`
+  - suite locale aggiornata a `85` test `OK`
+  - release target riallineata a `2.2.2 refactorizzata`
+  - nuovo artefatto bundle previsto: `dist/affitto_2_2_2_refactorizzata_bundle.zip`

@@ -1,7 +1,7 @@
 # OUTPUT_CURRENT.md
 
 ## Patch corrente
-Session/profile hardening aggiornato:
+Session/profile hardening aggiornato + refactor strutturale:
 - consolidamento della linea `camoufox`
 - fix memoria negativa `private_only`
 - fix `idealista` sul `detail_touch_count`
@@ -13,6 +13,9 @@ Session/profile hardening aggiornato:
 - render context deterministico cross-host
 - adaptive interaction pacing
 - static resources bootstrap nel setup browser
+- session policy esplicita per sito
+- state machine tabellare estratta
+- modularizzazione `browser/guard/sites`
 - ricostruzione bundle Windows stable per i prossimi soak
 - riallineamento docs e memoria agente
 - review comparativa `idealista` vs `immobiliare` sul soak del `2026-03-27`
@@ -23,8 +26,8 @@ Session/profile hardening aggiornato:
 
 ## Stato
 `camoufox` resta il backend unico del ramo.
-La linea `2.2 stable` gira nella root tecnica `2.2_test` ed e ora nella fase di hardening dell'identita persistente piu che di puro motore.
-Le prossime patch sensate sono orientate a stabilita, osservabilita e riduzione del rumore operativo, non a spoofing avanzato.
+La linea `2.2.2 refactorizzata` gira nella root tecnica `2.2_test` ed e ora nella fase di hardening dell'identita persistente piu che di puro motore.
+Le prossime patch sensate sono orientate a stabilita, osservabilita e riallineamento dei contratti residui del refactor, non a spoofing avanzato.
 
 ## Implementazione eseguita
 - backend browser predefinito portato a `camoufox`
@@ -68,7 +71,7 @@ Le prossime patch sensate sono orientate a stabilita, osservabilita e riduzione 
 - nuova dist pronta:
   - `dist/affitto_gui/affitto_gui.exe`
   - `dist/affitto_gui/affitto_cli.exe`
-  - `dist/affitto_2_2_1_stable_bundle.zip`
+  - `dist/affitto_2_2_2_refactorizzata_bundle.zip`
 - build script reso tollerante ai lock del vecchio `.zip` stable
 - CLI live ridotta a `--browser-channel auto|camoufox`
 - default CLI dei debug artifact riallineato a `runtime/debug`
@@ -98,11 +101,30 @@ Le prossime patch sensate sono orientate a stabilita, osservabilita e riduzione 
   - pacing Gamma con `reason` e delay
   - bootstrap endpoint-by-endpoint
   - click tecnici e chiusura sessione
+- refactor strutturale eseguito:
+  - `browser/session_policy.py` con firma hardware, `user_agent`, pacing Gamma e bootstrap URLs per sito
+  - `browser/bootstrap.py` con `apply_interaction_pacing()` e `bootstrap_static_resources_cache()`
+  - `browser/factory.py` con `close/prune/destroy` del runtime browser
+  - `guard/state_machine.py` con transizioni tabellari `healthy/suspect/degraded/cooldown/blocked/challenge_seen`
+  - `sites/idealista.py` e `sites/immobiliare.py` per costanti e helper sito-specifici
+  - `live_fetch.py` mantenuto come orchestratore
+- `render_context.py` ora genera l'`init_script` dal profilo hardware della session policy
+- il launch path logga esplicitamente:
+  - acquisizione identita `fresh`
+  - riuso identita `reused`
+  - preparazione della pagina post-bootstrap
+- `hard_block` ora applica anche disposition del profilo persistente bloccato:
+  - chiusura slot sito
+  - distruzione sicura del profilo vecchio sotto la root gestita
 - review di coerenza completata sul contratto blocchi/profilo:
   - `hard_block` continua a ruotare `profile_generation`
   - `interstitial_datadome` resta cooldown/probe sulla stessa identity
-- bundle Windows `2.2.1 stable` ricostruito con il set di patch corrente per il test VM
-- documentazione di contesto ripulita e riallineata al ruolo di release stable
+- drift post-refactor chiusi:
+  - pacing cookie riallineato alla policy del sito corrente
+  - `guard_jitter_*` reintegrati come clipping numerico del Gamma pacing
+  - log `Interaction pacing clipped` aggiunto quando i bound operativi correggono il delay
+- bundle Windows target aggiornato a `2.2.2 refactorizzata`
+- documentazione di contesto ripulita e riallineata al ruolo della nuova release
 
 ## Stato operativo osservato in VM
 - finestra osservata: `2026-03-26 11:59:51` -> `2026-03-26 16:55:19`
@@ -172,8 +194,15 @@ Le prossime patch sensate sono orientate a stabilita, osservabilita e riduzione 
 
 ## File toccati
 - `src/affitto_v2/scrapers/live_fetch.py`
+- `src/affitto_v2/scrapers/browser/session_policy.py`
+- `src/affitto_v2/scrapers/browser/bootstrap.py`
+- `src/affitto_v2/scrapers/browser/factory.py`
+- `src/affitto_v2/scrapers/guard/state_machine.py`
+- `src/affitto_v2/scrapers/sites/idealista.py`
+- `src/affitto_v2/scrapers/sites/immobiliare.py`
 - `src/affitto_v2/scrapers/render_context.py`
 - `tests/test_static_resource_bootstrap.py`
+- `tests/test_session_policy_and_state_machine.py`
 - `src/affitto_v2/gui_app.py`
 - `src/affitto_v2/main.py`
 - `scripts/build_windows_bundle.ps1`
@@ -197,7 +226,8 @@ Le prossime patch sensate sono orientate a stabilita, osservabilita e riduzione 
   - niente variazione artificiale di browser stack
 - il core conserva ancora residui legacy non allineati al ramo `camoufox-only`:
   - alcuni campi/telemetrie storiche di assistenza ancora presenti come compatibilita interna
-- `live_fetch.py` resta troppo concentrato e va rifattorizzato per estrazioni meccaniche a basso rischio
+- il refactor grosso di `live_fetch.py` e stato chiuso e i drift immediati sono stati corretti
+- il limite successivo non e piu interno al refactor, ma la validazione soak del comportamento reale in VM
 - la GUI bundle e il companion CLI sono coerenti col nuovo backend, ma il flusso interattivo end-to-end da bundle resta meno verificato del soak CLI/servizio
 - le prossime patch desiderabili sono oggi queste:
   - `immobiliare adaptive prepare`:
@@ -217,6 +247,7 @@ Le prossime patch sensate sono orientate a stabilita, osservabilita e riduzione 
 - `.\\.venv\\Scripts\\python.exe -m unittest tests.test_render_context`
 - `.\\.venv\\Scripts\\python.exe -m unittest tests.test_interaction_pacing`
 - `.\\.venv\\Scripts\\python.exe -m unittest tests.test_static_resource_bootstrap`
+- `.\\.venv\\Scripts\\python.exe -m unittest tests.test_session_policy_and_state_machine`
 - `.\\.venv\\Scripts\\python.exe -m unittest discover -s tests`
 - esito locale attuale: `81` test `OK`
 - in VM:

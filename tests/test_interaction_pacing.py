@@ -100,6 +100,23 @@ class InteractionPacingTests(unittest.IsolatedAsyncioTestCase):
         sleep_mock.assert_awaited_once_with(4.25)
         self.assertEqual(delay_sec, 4.25)
 
+    async def test_apply_interaction_pacing_clips_gamma_delay_with_guard_bounds(self) -> None:
+        sleep_mock = mock.AsyncMock()
+
+        with (
+            mock.patch.object(live_fetch.random, "gammavariate", return_value=4.25) as gamma_mock,
+            mock.patch.object(live_fetch.asyncio, "sleep", new=sleep_mock),
+        ):
+            delay_sec = await live_fetch.apply_interaction_pacing(
+                site="idealista",
+                clip_min_sec=1.0,
+                clip_max_sec=3.0,
+            )
+
+        gamma_mock.assert_called_once_with(2.0, 1.5)
+        sleep_mock.assert_awaited_once_with(3.0)
+        self.assertEqual(delay_sec, 3.0)
+
     async def test_close_browser_handles_paces_before_each_close(self) -> None:
         calls: list[str] = []
 
@@ -124,7 +141,7 @@ class InteractionPacingTests(unittest.IsolatedAsyncioTestCase):
             calls.append("pace")
 
         with mock.patch.object(live_fetch, "apply_interaction_pacing", new=mock.AsyncMock(side_effect=record_pacing)):
-            await live_fetch._accept_cookies_if_present(page)
+            await live_fetch._accept_cookies_if_present(page, site="idealista")
 
         self.assertEqual(calls, ["pace", "click", "wait"])
 

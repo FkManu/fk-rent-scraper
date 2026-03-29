@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from typing import Protocol
 
-GLOBAL_RENDER_CONTEXT_INIT_SCRIPT = """
+from .browser.session_policy import HardwareMimetics
+
+
+def build_render_context_init_script(hardware: HardwareMimetics) -> str:
+    script = """
 (() => {
   if (globalThis.__affittoRenderContextPatched) {
     return;
@@ -27,11 +31,12 @@ GLOBAL_RENDER_CONTEXT_INIT_SCRIPT = """
     });
   };
 
-  defineNavigatorValue('deviceMemory', 16);
-  defineNavigatorValue('hardwareConcurrency', 8);
+  defineNavigatorValue('deviceMemory', __DEVICE_MEMORY__);
+  defineNavigatorValue('hardwareConcurrency', __HARDWARE_CONCURRENCY__);
+  defineNavigatorValue('userAgent', __USER_AGENT__);
 
-  const vendor = 'Intel Inc.';
-  const renderer = 'Intel(R) Iris(TM) Graphics Xe';
+  const vendor = __WEBGL_VENDOR__;
+  const renderer = __WEBGL_RENDERER__;
   const maskedVendor = 0x1F00;
   const maskedRenderer = 0x1F01;
   const unmaskedVendor = 0x9245;
@@ -135,26 +140,64 @@ GLOBAL_RENDER_CONTEXT_INIT_SCRIPT = """
   });
 })();
 """.strip()
+    return (
+        script.replace("__DEVICE_MEMORY__", str(hardware.device_memory))
+        .replace("__HARDWARE_CONCURRENCY__", str(hardware.hardware_concurrency))
+        .replace("__USER_AGENT__", repr(hardware.user_agent))
+        .replace("__WEBGL_VENDOR__", repr(hardware.webgl_vendor))
+        .replace("__WEBGL_RENDERER__", repr(hardware.webgl_renderer))
+    )
+
+
+GLOBAL_RENDER_CONTEXT_INIT_SCRIPT = build_render_context_init_script(
+    HardwareMimetics(
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
+        ),
+        device_memory=16,
+        hardware_concurrency=8,
+        webgl_vendor="Intel Inc.",
+        webgl_renderer="Intel(R) Iris(TM) Graphics Xe",
+    )
+)
 
 
 class SupportsInitScript(Protocol):
     async def add_init_script(self, *, script: str | None = None, path: str | None = None) -> None: ...
 
 
-async def install_render_context_init_script(context: SupportsInitScript, *, logger=None) -> None:
-    await context.add_init_script(script=GLOBAL_RENDER_CONTEXT_INIT_SCRIPT)
+async def install_render_context_init_script(
+    context: SupportsInitScript,
+    *,
+    hardware: HardwareMimetics | None = None,
+    logger=None,
+) -> None:
+    selected_hardware = hardware or HardwareMimetics(
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
+        ),
+        device_memory=16,
+        hardware_concurrency=8,
+        webgl_vendor="Intel Inc.",
+        webgl_renderer="Intel(R) Iris(TM) Graphics Xe",
+    )
+    await context.add_init_script(script=build_render_context_init_script(selected_hardware))
     if logger is not None:
-        logger.debug(
-            "Installed render context init script. navigator_device_memory=%s navigator_hardware_concurrency=%s webgl_vendor=%s webgl_renderer=%s canvas_noise=%s",
-            16,
-            8,
-            "Intel Inc.",
-            "Intel(R) Iris(TM) Graphics Xe",
-            "static",
+        logger.info(
+            "Installed render context init script. navigator_user_agent=%s navigator_device_memory=%s navigator_hardware_concurrency=%s webgl_vendor=%s webgl_renderer=%s canvas_noise=%s",
+            selected_hardware.user_agent,
+            selected_hardware.device_memory,
+            selected_hardware.hardware_concurrency,
+            selected_hardware.webgl_vendor,
+            selected_hardware.webgl_renderer,
+            selected_hardware.canvas_noise_mode,
         )
 
 
 __all__ = [
+    "build_render_context_init_script",
     "GLOBAL_RENDER_CONTEXT_INIT_SCRIPT",
     "install_render_context_init_script",
 ]

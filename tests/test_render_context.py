@@ -7,8 +7,10 @@ from unittest import mock
 from src.affitto_v2.scrapers import live_fetch
 from src.affitto_v2.scrapers.render_context import (
     GLOBAL_RENDER_CONTEXT_INIT_SCRIPT,
+    build_render_context_init_script,
     install_render_context_init_script,
 )
+from src.affitto_v2.scrapers.browser.session_policy import HardwareMimetics
 
 
 class _RecordingContext:
@@ -67,6 +69,23 @@ class InstallRenderContextInitScriptTests(unittest.IsolatedAsyncioTestCase):
             [{"script": GLOBAL_RENDER_CONTEXT_INIT_SCRIPT, "path": None}],
         )
 
+    def test_build_render_context_init_script_uses_hardware_signature(self) -> None:
+        script = build_render_context_init_script(
+            HardwareMimetics(
+                user_agent="UA-Test",
+                device_memory=32,
+                hardware_concurrency=12,
+                webgl_vendor="Vendor-Test",
+                webgl_renderer="Renderer-Test",
+            )
+        )
+
+        self.assertIn("deviceMemory', 32", script)
+        self.assertIn("hardwareConcurrency', 12", script)
+        self.assertIn("userAgent', 'UA-Test'", script)
+        self.assertIn("Vendor-Test", script)
+        self.assertIn("Renderer-Test", script)
+
 
 class LaunchBrowserSessionRenderContextTests(unittest.IsolatedAsyncioTestCase):
     async def test_launch_browser_session_installs_script_for_ephemeral_context(self) -> None:
@@ -97,5 +116,8 @@ class LaunchBrowserSessionRenderContextTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(context, fake_context)
         self.assertIs(page, fake_context.created_page)
         self.assertEqual(channel_label, "camoufox")
-        install_mock.assert_awaited_once_with(fake_context, logger=mock.ANY)
-        bootstrap_mock.assert_awaited_once_with(fake_context, logger=mock.ANY)
+        install_mock.assert_awaited_once()
+        self.assertIs(install_mock.await_args.args[0], fake_context)
+        self.assertIn("hardware", install_mock.await_args.kwargs)
+        self.assertIn("logger", install_mock.await_args.kwargs)
+        bootstrap_mock.assert_awaited_once_with(fake_context, logger=mock.ANY, site="idealista")

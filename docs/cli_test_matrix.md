@@ -113,8 +113,8 @@ Smoke test bundle:
 .\dist\affitto_gui\affitto_cli.exe validate-config --config "$env:AFFITTO_V2_RUNTIME_DIR\app_config.json"
 ```
 
-Artefatto stable utile per consegna locale o release:
-- `dist\affitto_2_2_1_stable_bundle.zip`
+Artefatto release utile per consegna locale o release:
+- `dist\affitto_2_2_2_refactorizzata_bundle.zip`
 
 Note runtime bundle:
 - da sorgente resta `runtime`

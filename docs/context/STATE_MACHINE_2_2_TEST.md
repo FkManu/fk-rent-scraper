@@ -99,6 +99,21 @@ I passaggi a `cooldown`, `frozen`, `assist_required` e `blocked` devono seguire 
 ## Regola finale
 In `2.2_test` il passaggio di stato vale piu del singolo fetch outcome.
 
+## Traduzione attuale in codice
+- la state machine del run e ora estratta in `src/affitto_v2/scrapers/guard/state_machine.py`
+- `live_fetch.py` la usa come orchestratore invece di contenere tutta la logica inline
+- il mapping corrente tradotto in codice copre:
+  - `healthy`
+  - `suspect`
+  - `degraded`
+  - `cooldown`
+  - `blocked`
+  - `challenge_seen`
+- su `blocked` con famiglia `hard_block` la decisione non si limita al cooldown:
+  - ruota `profile_generation`
+  - lega il cooldown alla generazione vecchia
+  - distrugge il vecchio profilo persistente sotto la root gestita
+
 ## Stato del servizio continuo
 Accanto allo stato del singolo run esiste ora anche uno stato minimo del servizio 24/7.
 

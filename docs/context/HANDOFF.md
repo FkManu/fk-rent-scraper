@@ -14,7 +14,7 @@
   - orchestrazione 24/7 con runtime condiviso
 
 ## Decisione di progetto
-- `2.2 stable` e la release corrente della nuova linea
+- `2.2.2 refactorizzata` e la release corrente della nuova linea
 - `2.1_stable` resta il riferimento storico e comparativo
 - `2.2_test` resta la root tecnica in cui vivono sessione lunga, lifecycle continuo e precisione live
 - il file `docs/risk_scoring_e_griglia_segnali_antibot.md` resta la pietra miliare interna della nuova linea
@@ -47,6 +47,13 @@
 - bootstrap tecnico delle risorse statiche comuni:
   - warm-up del `BrowserContext` su endpoint infrastrutturali `gstatic/google/cloudflare`
   - pagina temporanea dedicata chiusa prima dell'uso operativo della sessione
+- refactor strutturale completato su `live_fetch.py`:
+  - `browser/session_policy.py` governa user-agent, hardware mimetics, pacing e bootstrap
+  - `browser/bootstrap.py` concentra pacing Gamma e warm-up tecnico
+  - `browser/factory.py` concentra close/prune/destroy dei profili persistenti
+  - `guard/state_machine.py` traduce in codice la state machine tabellare del run
+  - `sites/idealista.py` e `sites/immobiliare.py` concentrano selettori e costanti per-sito
+  - `live_fetch.py` resta l'orchestratore del ciclo, non piu il contenitore di tutte le responsabilita
 
 ## Pivot backend
 - backend browser operativo del ramo: `camoufox`
@@ -58,6 +65,10 @@
   - `timezone=Europe/Rome`
   - `screen=1920x1080`
 - setup Windows aggiornato per eseguire `python -m camoufox fetch`
+- launch path ora osservabile a `INFO`:
+  - `Launch path acquired fresh identity`
+  - `Launch path prepared page`
+  - `Launch path reused mature identity`
 
 ## Stato operativo visto in VM il 2026-03-26
 - file di riferimento: `docs/tmp_logs.md`
@@ -132,6 +143,18 @@
   - log dettagliati aggiunti su render context, pacing Gamma, bootstrap static resources e chiusura sessione
   - bundle Windows riallineato all'artefatto `dist/affitto_2_2_1_stable_bundle.zip`
   - target di consegna aggiornato a release `2.2.1 stable`
+- refactor strutturale del `2026-03-30`:
+  - `live_fetch.py` diviso in moduli `browser/guard/sites`
+  - `render_context.py` reso policy-driven tramite hardware signature
+  - `hard_block` con disposition esplicita del vecchio profilo persistente
+  - suite locale aggiornata a `84` test `OK`
+- fix successivo del `2026-03-30` sui drift post-refactor:
+  - `accept_cookies` policy-aware per sito
+  - `guard_jitter_*` reintegrati come clipping del Gamma pacing
+  - suite locale aggiornata a `85` test `OK`
+- release successiva del `2026-03-30`:
+  - bundle Windows riallineato all'artefatto `dist/affitto_2_2_2_refactorizzata_bundle.zip`
+  - target di consegna aggiornato a release `2.2.2 refactorizzata`
 
 ## Lettura tecnica del soak
 - `idealista` mostra continuita forte:
@@ -160,7 +183,7 @@ Tradotto:
 - la continuita profilo va trattata come superficie anti-block a parte
 - la garanzia "solo privati" resta importante, ma non e piu l'unico fronte vivo
 - il guard va reso piu leggibile quando il degrado nasce dal codice o dalla reputazione profilo
-- la parte piu debole sul piano codice non e la stabilita locale delle ultime patch, ma il fatto che `live_fetch.py` concentri ancora troppo orchestration e residui legacy
+- la parte piu debole del ramo non e piu il monolite puro di `live_fetch.py`, ma il completamento del riallineamento dei contratti attorno ai moduli nuovi
 
 ## Review soak VM del 2026-03-27
 - file di riferimento:
@@ -220,7 +243,7 @@ Tradotto:
 
 ## Prossimo passo sensato
 - mantenere la modalita GUI `debugger` come percorso standard di osservabilita nei soak
-- aprire prima la slice `immobiliare adaptive prepare`
-- aggiungere poi la notifica blocco lungo + recovery
+- eseguire il soak VM della release `2.2.2 refactorizzata`
+- aprire poi la slice `immobiliare adaptive prepare`
+- aggiungere la notifica blocco lungo + recovery
 - valutare solo dopo un `soft mode` locale post-block
-- rimandare ancora il refactor prudente di `live_fetch.py` finche queste slice operative non sono validate
