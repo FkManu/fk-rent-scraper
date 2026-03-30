@@ -183,7 +183,20 @@ Tradotto:
 - la continuita profilo va trattata come superficie anti-block a parte
 - la garanzia "solo privati" resta importante, ma non e piu l'unico fronte vivo
 - il guard va reso piu leggibile quando il degrado nasce dal codice o dalla reputazione profilo
-- la parte piu debole del ramo non e piu il monolite puro di `live_fetch.py`, ma il completamento del riallineamento dei contratti attorno ai moduli nuovi
+- la parte piu debole del ramo non e piu il monolite puro di `live_fetch.py`, ma il completamento della sua scomposizione residua su challenge flow, extraction quality e run loop
+
+## Slice strutturale successiva chiusa
+- `live_fetch.py` e stato alleggerito senza cambiare comportamento osservato:
+  - contratti dati spostati in `src/affitto_v2/scrapers/core_types.py`
+  - guard store/profile helpers spostati in `src/affitto_v2/scrapers/guard/store.py`
+  - persona/profili/session identity spostati in `src/affitto_v2/scrapers/browser/persona.py`
+  - helper artifact/debug spostati in `src/affitto_v2/scrapers/debug_artifacts.py`
+- il file mantiene wrapper locali sui nomi privati gia usati dai test per non rompere il contratto interno durante la transizione
+- la suite locale resta verde: `85` test `OK`
+- prossima scomposizione sensata:
+  - `guard/challenge_flow.py`
+  - `browser/page_flow.py`
+  - decomposizione di `fetch_live_once()` in step nominati
 
 ## Review soak VM del 2026-03-27
 - file di riferimento:
@@ -244,6 +257,6 @@ Tradotto:
 ## Prossimo passo sensato
 - mantenere la modalita GUI `debugger` come percorso standard di osservabilita nei soak
 - eseguire il soak VM della release `2.2.2 refactorizzata`
-- aprire poi la slice `immobiliare adaptive prepare`
+- aprire poi la slice strutturale su `challenge/page flow` oppure, in alternativa, `immobiliare adaptive prepare` se il soak mostra bisogno operativo prima del refactor successivo
 - aggiungere la notifica blocco lungo + recovery
 - valutare solo dopo un `soft mode` locale post-block

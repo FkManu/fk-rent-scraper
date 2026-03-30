@@ -1,18 +1,16 @@
 # ACTIVE_PATCH.md
 
 ## Patch corrente
-Riallineamento post-refactor su struttura, review e docs vive:
-- review locale completa del refactor `browser/guard/sites`
-- registrazione nello storico della nuova session policy per sito
-- registrazione della state machine tabellare estratta
-- registrazione della disposition esplicita del profilo persistente su `hard_block`
-- chiusura dei drift post-refactor:
-  - `accept_cookies` policy-aware per sito
-  - `guard_jitter_*` reintegrati come clipping del Gamma pacing
-- correzione dei markdown che raccontavano ancora `live_fetch.py` come monolite e il refactor come prossimo step
+Scomposizione conservativa ulteriore di `live_fetch.py` + riallineamento docs:
+- estrazione dei contratti dati in `core_types.py`
+- estrazione del guard store in `guard/store.py`
+- estrazione di persona/profili/session identity in `browser/persona.py`
+- estrazione degli artifact helper in `debug_artifacts.py`
+- mantenimento di compatibilita dei nomi privati esposti ai test
+- aggiornamento della memoria di progetto sulla nuova mappa del codice
 
 ## Obiettivo
-Tenere allineata la linea `2.2.2 refactorizzata` dopo il refactor strutturale del motore live, fissando nello storico la nuova architettura, la chiusura dei drift e la nuova release.
+Continuare la scomposizione di `live_fetch.py` senza alterare il comportamento della `2.2.2 refactorizzata`, fissando nei markdown cosa e gia uscito dal file e quali blocchi restano ancora da isolare.
 
 ## Contesto
 - `2.2_test` deriva da `2.1_stable`, ma oggi e gia divergente nel motore live
@@ -39,24 +37,25 @@ Tenere allineata la linea `2.2.2 refactorizzata` dopo il refactor strutturale de
 - i due drift reali emersi nella prima review sono stati corretti nel passo successivo:
   - pacing cookie riallineato alla policy del sito corrente
   - `guard_jitter_*` reintegrati come clipping del Gamma pacing
-- il rischio immediato e lasciare documenti e handoff fermi al contratto pre-refactor
+- la nuova review strutturale mostra che `live_fetch.py` resta ancora pesante soprattutto in:
+  - challenge/page flow
+  - extraction quality + parser drift
+  - orchestrazione di `fetch_live_once()`
+- il rischio immediato e perdere traccia della scomposizione gia fatta e riaprire patch casuali sul file monolite
 
 ## Scope
-- riallineare doc vive e memoria al nuovo stato del ramo
-- registrare nello storico:
-  - session policy per sito
-  - state machine tabellare
-  - modularizzazione `browser/guard/sites`
-  - destruction del profilo persistente su `hard_block`
-  - clipping operativo del Gamma pacing tramite `guard_jitter_*`
-- chiudere una review completa di coerenza locale su:
-  - `live_fetch.py`
-  - `render_context.py`
-  - test nuovi
-  - note CLI/backend
+- estrarre componenti non orchestrativi da `live_fetch.py`
+- lasciare invariato il contratto dei nomi privati gia usati dai test
+- aggiornare i markdown di contesto con la nuova mappa:
+  - `core_types.py`
+  - `guard/store.py`
+  - `browser/persona.py`
+  - `debug_artifacts.py`
+- documentare quali blocchi restano ancora nel file orchestratore
 
 ## Non-scope
-- niente refactor strutturale di `live_fetch.py` prima del soak
+- niente refactor comportamentale del run loop
+- niente variazioni a policy anti-bot, pacing o trigger del guard
 - niente riapertura di una strategia multi-browser
 - niente geolocation/proxy spoof non legati a un IP reale
 - niente espansione aperta del fingerprint spoof oltre il set deterministico gia codificato nel render context
@@ -66,24 +65,24 @@ Tenere allineata la linea `2.2.2 refactorizzata` dopo il refactor strutturale de
 - niente bypass aggressivi
 
 ## File principali coinvolti
-- `docs/cli_test_matrix.md`
 - `docs/context/HANDOFF.md`
 - `docs/context/NEXT_STEPS.md`
 - `docs/context/codex/OUTPUT_CURRENT.md`
 - `docs/context/codex/ACTIVE_PATCH.md`
 - `docs/context/codex/HISTORY.md`
+- `src/affitto_v2/scrapers/core_types.py`
+- `src/affitto_v2/scrapers/debug_artifacts.py`
+- `src/affitto_v2/scrapers/guard/store.py`
+- `src/affitto_v2/scrapers/browser/persona.py`
 - `src/affitto_v2/scrapers/live_fetch.py`
-- `src/affitto_v2/scrapers/render_context.py`
-- `tests/test_render_context.py`
-- `tests/test_interaction_pacing.py`
-- `tests/test_static_resource_bootstrap.py`
-- `scripts/build_windows_bundle.ps1`
+- `tests/test_private_only_and_logging.py`
+- `tests/test_session_policy_and_state_machine.py`
 
 ## Done quando
-- i doc vivi riflettono correttamente il refactor del `2026-03-30`
-- la memoria agente riporta:
-  - session policy per sito
-  - state machine tabellare
-  - modularizzazione `browser/guard/sites`
-  - review locale con drift chiusi e suite aggiornata
-- `HANDOFF` e `NEXT_STEPS` non raccontano piu il refactor come lavoro futuro
+- i doc vivi riportano anche questa seconda slice di scomposizione
+- `live_fetch.py` non contiene piu:
+  - contratti dati
+  - persistenza guard state
+  - persona/profili/session identity
+  - helper artifact/debug
+- la suite locale resta verde dopo l'estrazione

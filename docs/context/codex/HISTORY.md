@@ -250,3 +250,11 @@
   - suite locale aggiornata a `85` test `OK`
   - release target riallineata a `2.2.2 refactorizzata`
   - nuovo artefatto bundle previsto: `dist/affitto_2_2_2_refactorizzata_bundle.zip`
+- slice strutturale conservativa del `2026-03-30` per ridurre ancora il peso di `live_fetch.py`:
+  - estratti i contratti dati in `src/affitto_v2/scrapers/core_types.py`
+  - estratta la persistenza del guard/profile state in `src/affitto_v2/scrapers/guard/store.py`
+  - estratti persona Camoufox, profili e session identity in `src/affitto_v2/scrapers/browser/persona.py`
+  - estratti slug e helper artifact/debug in `src/affitto_v2/scrapers/debug_artifacts.py`
+  - mantenuto in `live_fetch.py` un layer di compatibilita sui nomi privati gia usati dai test
+  - nessun cambio intenzionale di comportamento del run loop
+  - suite locale riconfermata a `85` test `OK`

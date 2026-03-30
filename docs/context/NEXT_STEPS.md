@@ -17,6 +17,11 @@ Oggi il ramo ha gia:
 - adaptive interaction pacing su `goto/click/close`
 - bootstrap static resources cache nel setup del `BrowserContext`
 - refactor strutturale del motore live in moduli `browser/guard/sites`
+- seconda slice di scomposizione di `live_fetch.py`:
+  - `core_types.py`
+  - `guard/store.py`
+  - `browser/persona.py`
+  - `debug_artifacts.py`
 
 Per ricostruire il contesto minimo leggere prima:
 1. `docs/risk_scoring_e_griglia_segnali_antibot.md`
@@ -79,7 +84,11 @@ Per ricostruire il contesto minimo leggere prima:
    - verificare che il launch path `fresh/reused` resti leggibile nei soak lunghi
    - verificare in log i casi `Interaction pacing clipped`
    - consolidare il ruolo dei moduli nuovi senza riaprire un rewrite ampia
-7. Orchestrazione 24/7:
+7. Scomposizione residua di `live_fetch.py`:
+   - estrarre `challenge/page flow`
+   - spezzare `fetch_live_once()` in step nominati
+   - lasciare invariati trigger e comportamento del guard
+8. Orchestrazione 24/7:
    - promuovere il soak del `2026-03-26` a baseline comparativa del ramo
    - validare se i recycle locali periodici su `immobiliare` restano necessari dopo la nuova rotazione profilo
    - raffinare la policy del runtime condiviso solo dopo confronto su run comparabili
@@ -87,14 +96,14 @@ Per ricostruire il contesto minimo leggere prima:
      - `recycle_site_slot`
      - `recycle_runtime`
      - `stop_service`
-8. Stable release hygiene:
+9. Stable release hygiene:
    - mantenere ordinati i markdown vivi di contesto
    - evitare duplicazioni tra `README`, `HANDOFF`, `NEXT_STEPS` e `codex/OUTPUT_CURRENT`
    - trattare `dist/` come artefatto build locale, non come contenuto repo
-9. Osservabilita residua:
+10. Osservabilita residua:
    - usare la modalita GUI `debugger` come strumento standard di soak quando il guard scatta
    - valutare osservabilita aggiuntiva su network/TLS/device checks solo se i log attuali restano ambigui
-10. Notifiche operative:
+11. Notifiche operative:
    - aggiungere una notifica singola quando un sito entra in blocco lungo `>= 1h`
    - includere nel messaggio:
      - `site`
@@ -102,13 +111,13 @@ Per ricostruire il contesto minimo leggere prima:
      - `profile_generation`
      - `next_attempt_local`
    - inviare una seconda notifica solo alla recovery del sito
-11. Soft mode locale post-block:
+12. Soft mode locale post-block:
    - evitare di allungare la cadence globale del servizio
    - valutare invece un `soft mode` per `1-2` cicli solo sul sito che ha appena preso `hard_block`
    - obiettivo:
      - ridurre pressione locale
      - non perdere troppa operativita complessiva
-12. Validazione delle patch del `2026-03-28`:
+13. Validazione delle patch del `2026-03-28`:
    - verificare in soak che il render context deterministico non introduca drift visivo o regressioni di parsing
    - verificare che il nuovo pacing Gamma non degradi inutilmente throughput o cadence del servizio
    - verificare che il bootstrap static resources non alteri il tasso di block o il tempo di setup per sito

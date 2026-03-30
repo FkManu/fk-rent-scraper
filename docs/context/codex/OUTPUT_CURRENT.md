@@ -16,6 +16,7 @@ Session/profile hardening aggiornato + refactor strutturale:
 - session policy esplicita per sito
 - state machine tabellare estratta
 - modularizzazione `browser/guard/sites`
+- alleggerimento ulteriore di `live_fetch.py` con estrazione di types/store/persona/artifacts
 - ricostruzione bundle Windows stable per i prossimi soak
 - riallineamento docs e memoria agente
 - review comparativa `idealista` vs `immobiliare` sul soak del `2026-03-27`
@@ -108,6 +109,12 @@ Le prossime patch sensate sono orientate a stabilita, osservabilita e riallineam
   - `guard/state_machine.py` con transizioni tabellari `healthy/suspect/degraded/cooldown/blocked/challenge_seen`
   - `sites/idealista.py` e `sites/immobiliare.py` per costanti e helper sito-specifici
   - `live_fetch.py` mantenuto come orchestratore
+- seconda slice di scomposizione eseguita senza cambiare comportamento:
+  - `core_types.py` con dataclass e contratti runtime
+  - `guard/store.py` con load/save/prune/profile helpers del guard
+  - `browser/persona.py` con persona Camoufox, profili e session identity
+  - `debug_artifacts.py` con slug e helper artifact/debug
+  - `live_fetch.py` mantiene wrapper locali per i nomi privati gia usati nei test
 - `render_context.py` ora genera l'`init_script` dal profilo hardware della session policy
 - il launch path logga esplicitamente:
   - acquisizione identita `fresh`
@@ -123,6 +130,10 @@ Le prossime patch sensate sono orientate a stabilita, osservabilita e riallineam
   - pacing cookie riallineato alla policy del sito corrente
   - `guard_jitter_*` reintegrati come clipping numerico del Gamma pacing
   - log `Interaction pacing clipped` aggiunto quando i bound operativi correggono il delay
+- il monolite residuo di `live_fetch.py` si concentra ora soprattutto in:
+  - challenge/page flow
+  - extraction quality + parser drift
+  - orchestrazione di `fetch_live_once()`
 - bundle Windows target aggiornato a `2.2.2 refactorizzata`
 - documentazione di contesto ripulita e riallineata al ruolo della nuova release
 

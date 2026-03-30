@@ -27,7 +27,17 @@ Patch reviewata su base locale dopo il refactor.
 - i due drift non bloccanti emersi nella prima review sono stati chiusi:
   - `_accept_cookies_if_present()` ora e policy-aware per sito
   - `guard_jitter_min_sec` e `guard_jitter_max_sec` sono ora integrati come clipping del Gamma pacing
+- ulteriore scomposizione strutturale completata senza regressioni osservate:
+  - `core_types.py`
+  - `guard/store.py`
+  - `browser/persona.py`
+  - `debug_artifacts.py`
+- `live_fetch.py` mantiene i nomi privati gia usati dai test come layer di compatibilita locale
 - review di coerenza completata su:
+  - `src/affitto_v2/scrapers/core_types.py`
+  - `src/affitto_v2/scrapers/debug_artifacts.py`
+  - `src/affitto_v2/scrapers/guard/store.py`
+  - `src/affitto_v2/scrapers/browser/persona.py`
   - `src/affitto_v2/scrapers/live_fetch.py`
   - `src/affitto_v2/scrapers/render_context.py`
   - `src/affitto_v2/scrapers/browser/*`
@@ -40,4 +50,6 @@ Patch reviewata su base locale dopo il refactor.
   - `hard_block` -> rotate `profile_generation` -> cooldown generazione vecchia -> distruzione profilo persistente vecchio
   - `interstitial_datadome` -> cooldown/probe senza rotate
 - suite locale aggiornata; `85` test `OK`
-- residuo principale: soak VM per confermare che `rotate + destroy` non introduca churn eccessivo e che i nuovi log `fresh/reused` siano sufficienti a leggere i run lunghi
+- residuo principale:
+  - soak VM per confermare che `rotate + destroy` non introduca churn eccessivo
+  - prossima slice consigliata: estrarre da `live_fetch.py` il challenge/page flow e la decomposizione di `fetch_live_once()`

@@ -1,33 +1,88 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
 import random
 import re
 import sys
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
-from browserforge.fingerprints import Screen
 from camoufox.async_api import AsyncNewBrowser
 from camoufox.exceptions import CamoufoxNotInstalled
 from camoufox.pkgman import launch_path as camoufox_launch_path
-from camoufox.utils import launch_options as camoufox_launch_options
 from playwright.async_api import TimeoutError as PlaywrightTimeout
 from playwright.async_api import async_playwright
 
 from ..db import Database, ListingRecord
 from ..models import CaptchaMode, ExtractionFields
+from .core_types import (
+    BrowserSessionSlot,
+    CamoufoxPersona,
+    DriftDiagnostic,
+    ExtractionMetrics,
+    FetchAttemptStats,
+    FetchOutcome,
+    GuardDecision,
+    LiveFetchBlocked,
+    LiveFetchRunReport,
+    LiveFetchServiceRuntime,
+    RiskBudget,
+    RunRiskState,
+    TelemetrySnapshot,
+)
+from .debug_artifacts import (
+    prune_debug_artifacts as _prune_debug_artifacts_impl,
+    save_debug_artifacts as _save_debug_artifacts_impl,
+    save_guard_event_artifact as _save_guard_event_artifact,
+    slug as _slug,
+)
 from .render_context import install_render_context_init_script
 from .browser import bootstrap as browser_bootstrap
 from .browser import factory as browser_factory
+from .browser.persona import (
+    CAMOUFOX_DEFAULT_LOCALE as _CAMOUFOX_DEFAULT_LOCALE,
+    CAMOUFOX_DEFAULT_OS as _CAMOUFOX_DEFAULT_OS,
+    CAMOUFOX_DEFAULT_TIMEZONE as _CAMOUFOX_DEFAULT_TIMEZONE,
+    CHANNEL_LABELS as _CHANNEL_LABELS,
+    DEFAULT_BROWSER_LABEL as _DEFAULT_BROWSER_LABEL,
+    camoufox_launch_kwargs as _camoufox_launch_kwargs,
+    channel_to_label as _channel_to_label,
+    is_channel_available as _is_channel_available,
+    label_to_channel as _label_to_channel,
+    load_or_create_camoufox_persona as _load_or_create_camoufox_persona,
+    normalize_channel_label as _normalize_channel_label,
+    profile_dir_for_channel as _profile_dir_for_channel,
+    profile_dir_for_site as _profile_dir_for_site,
+    profile_dir_for_site_channel as _profile_dir_for_site_channel,
+    session_identity as _session_identity,
+    session_owner_key as _session_owner_key,
+    session_profile_root as _session_profile_root,
+)
 from .browser.session_policy import get_session_policy
 from .guard import state_machine as guard_state_machine
+from .guard.store import (
+    cooldown_profile_generation as _cooldown_profile_generation,
+    cooldown_remaining_sec as _cooldown_remaining_sec_impl,
+    guard_phase_label as _guard_phase_label,
+    is_warmup_entry as _is_warmup_entry,
+    load_guard_state as _load_guard_state_impl,
+    maybe_rotate_site_profile as _maybe_rotate_site_profile_impl,
+    new_guard_site_entry as _new_guard_site_entry,
+    profile_generation as _profile_generation,
+    prune_guard_state_sites as _prune_guard_state_sites_impl,
+    rotate_site_profile as _rotate_site_profile,
+    save_guard_state as _save_guard_state,
+    service_runtime_site_slot_snapshot,
+    site_profile_age_sec as _site_profile_age_sec_impl,
+    site_profile_generation as _site_profile_generation,
+    site_profile_rotation_age_cap_sec as _site_profile_rotation_age_cap_sec_impl,
+    site_state as _site_state,
+)
 from .sites import idealista as idealista_site
 from .sites import immobiliare as immobiliare_site
 
@@ -116,208 +171,12 @@ _HARD_BLOCK_PATTERNS = (
     re.compile(r"team\s+di\s+idealista", re.IGNORECASE),
 )
 _HARD_BLOCK_ID_RE = re.compile(r"\bID\s*:\s*([A-Za-z0-9-]{8,})\b", re.IGNORECASE)
-_DEFAULT_BROWSER_LABEL = "camoufox"
-_CHANNEL_LABELS = (_DEFAULT_BROWSER_LABEL,)
-_CAMOUFOX_DEFAULT_LOCALE = "it-IT"
-_CAMOUFOX_DEFAULT_OS = "windows"
-_CAMOUFOX_DEFAULT_TIMEZONE = "Europe/Rome"
-_CAMOUFOX_PERSONA_VERSION = 1
-_CAMOUFOX_PERSONA_WINDOWS = (
-    {
-        "label": "desktop_fhd_balanced",
-        "screen": (1920, 1080),
-        "windows": ((1760, 990), (1680, 960), (1600, 900)),
-    },
-    {
-        "label": "desktop_fhd_compact",
-        "screen": (1920, 1080),
-        "windows": ((1540, 900), (1480, 860), (1440, 840)),
-    },
-    {
-        "label": "desktop_fhd_wide",
-        "screen": (1920, 1080),
-        "windows": ((1820, 1020), (1740, 980), (1660, 940)),
-    },
-)
 _GUARD_STATE_VERSION = 7
 _BROWSER_MODE_MANAGED_STABLE = "managed_stable"
 _HARD_BLOCK_PROFILE_RESET_SITES = {"idealista", "immobiliare"}
 _PROFILE_ROTATION_MAX_AGE_SEC: dict[str, int] = {
     "immobiliare": 24 * 3600,
 }
-
-
-@dataclass(slots=True)
-class RiskBudget:
-    page_budget: int
-    detail_budget: int
-    identity_budget: int
-    retry_budget: int
-    cooldown_budget: int
-    manual_assist_threshold: int
-
-
-@dataclass(slots=True)
-class FetchAttemptStats:
-    retry_count: int = 0
-    detail_touch_count: int = 0
-
-
-@dataclass(slots=True)
-class TelemetrySnapshot:
-    site: str
-    browser_mode: str
-    channel_label: str
-    identity_switch: int
-    session_age_sec: int
-    profile_age_sec: int
-    profile_generation: int
-    cooldown_profile_generation: int | None
-    detail_touch_count: int
-    retry_count: int
-    risk_pause_reason: str
-    outcome_tier: str
-    outcome_code: str
-    cooldown_origin: str
-    manual_assist_used: bool
-    state_transition: str
-    assist_entry_mode: str = ""
-
-
-@dataclass(slots=True)
-class RunRiskState:
-    pages_used: int = 0
-    detail_used: int = 0
-    retries_used: int = 0
-    cooldown_used: int = 0
-    stop_requested: bool = False
-    stop_reason: str = ""
-    current_state: str = "warmup"
-    degraded_streak: int = 0
-    challenge_count: int = 0
-    assist_required: bool = False
-    assist_reason: str = ""
-    site_owner_replace_counts: dict[str, int] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
-class BrowserSessionSlot:
-    owner_key: str
-    site: str
-    channel_label: str
-    profile_root: str
-    browser: object | None
-    context: object
-    page: object
-    reuse_count: int = 0
-    created_monotonic: float = field(default_factory=time.monotonic)
-    last_used_monotonic: float = field(default_factory=time.monotonic)
-
-
-@dataclass(slots=True)
-class CamoufoxPersona:
-    version: int
-    persona_id: str
-    seed: int
-    site: str
-    channel_label: str
-    profile_generation: int
-    created_utc: str
-    screen_label: str
-    screen_width: int
-    screen_height: int
-    window_width: int
-    window_height: int
-    humanize_max_sec: float
-    history_length: int
-    font_spacing_seed: int
-    canvas_aa_offset: int
-    launch_options: dict[str, object]
-
-
-@dataclass(slots=True)
-class LiveFetchServiceRuntime:
-    playwright: object | None = None
-    session_slots: dict[str, BrowserSessionSlot] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
-class LiveFetchRunReport:
-    listings: list[ListingRecord]
-    run_state: str
-    run_state_site: str
-    assist_required: bool
-    assist_reason: str
-    stop_requested: bool
-    stop_reason: str
-    retry_count: int = 0
-    detail_touch_count: int = 0
-    identity_switch_count: int = 0
-    same_site_profile_reuse_count: int = 0
-    cross_site_session_reuse_count: int = 0
-    site_session_replace_count: int = 0
-    cooldown_count: int = 0
-    site_outcome_tiers: dict[str, str] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
-class FetchOutcome:
-    tier: str
-    code: str
-    http_status: int = 0
-    listings: int = 0
-    retryable: bool = False
-    detail: str = ""
-    challenge_visible: bool = False
-    hard_block: bool = False
-    suspicious_empty: bool = False
-    parse_issue: bool = False
-    network_issue: bool = False
-    from_fallback: bool = False
-    extraction_quality: str = ""
-
-
-@dataclass(slots=True)
-class GuardDecision:
-    action: str
-    cooldown_sec: int = 0
-    transition: bool = False
-    recovered: bool = False
-    previous_tier: str = ""
-    previous_code: str = ""
-    forced_cooldown: bool = False
-    destroy_persistent_profile: bool = False
-
-
-class LiveFetchBlocked(RuntimeError):
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
-
-
-@dataclass(slots=True)
-class ExtractionMetrics:
-    site: str
-    cards_count: int
-    missing_title_pct: int
-    missing_price_pct: int
-    missing_location_pct: int
-    missing_agency_pct: int
-    fallback_used: bool
-    selector_primary_count: int = 0
-    selector_alt_count: int = 0
-    quality: str = "good"
-    dominant_gap: str = ""
-
-
-@dataclass(slots=True)
-class DriftDiagnostic:
-    triggered: bool
-    severity: str = ""
-    reason: str = ""
-    detail: str = ""
-    artifact_event: str = ""
-
 
 def _normalize(value: str | None) -> str:
     return " ".join((value or "").split()).strip()
@@ -367,14 +226,6 @@ def _parse_utc_iso(value: str | None) -> datetime | None:
     except Exception:
         return None
 
-
-def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(path)
-
-
 def _site_key_from_url(url: str) -> str:
     host = (urlparse(url).hostname or "").lower()
     if "idealista.it" in host:
@@ -384,272 +235,14 @@ def _site_key_from_url(url: str) -> str:
     return host or "unknown"
 
 
-def _normalize_channel_label(value: str | None) -> str:
-    raw = (value or "").strip().lower()
-    if not raw:
-        return _DEFAULT_BROWSER_LABEL
-    return raw
-
-
-def _channel_to_label(channel: str | None) -> str:
-    return _normalize_channel_label(channel)
-
-
-def _camoufox_persona_path(profile_root: Path) -> Path:
-    return profile_root / "camoufox_persona.json"
-
-
-def _camoufox_persona_seed(*, site: str, channel_label: str, profile_generation: int) -> int:
-    raw = f"{site}|{channel_label}|{profile_generation}|camoufox-persona-v{_CAMOUFOX_PERSONA_VERSION}"
-    digest = hashlib.sha256(raw.encode("utf-8")).digest()
-    return int.from_bytes(digest[:8], "big", signed=False)
-
-
-def _camoufox_screen_constraints(*, width: int = 1920, height: int = 1080) -> Screen:
-    return Screen(
-        min_width=width,
-        max_width=width,
-        min_height=height,
-        max_height=height,
-    )
-
-
-def _camoufox_persona_from_payload(payload: dict[str, object]) -> CamoufoxPersona | None:
-    try:
-        launch_options = payload.get("launch_options")
-        if not isinstance(launch_options, dict):
-            return None
-        persona = CamoufoxPersona(
-            version=int(payload.get("version") or 0),
-            persona_id=str(payload.get("persona_id") or "").strip(),
-            seed=int(payload.get("seed") or 0),
-            site=str(payload.get("site") or "").strip(),
-            channel_label=str(payload.get("channel_label") or "").strip(),
-            profile_generation=int(payload.get("profile_generation") or 0),
-            created_utc=str(payload.get("created_utc") or "").strip(),
-            screen_label=str(payload.get("screen_label") or "").strip(),
-            screen_width=int(payload.get("screen_width") or 0),
-            screen_height=int(payload.get("screen_height") or 0),
-            window_width=int(payload.get("window_width") or 0),
-            window_height=int(payload.get("window_height") or 0),
-            humanize_max_sec=float(payload.get("humanize_max_sec") or 0.0),
-            history_length=int(payload.get("history_length") or 0),
-            font_spacing_seed=int(payload.get("font_spacing_seed") or 0),
-            canvas_aa_offset=int(payload.get("canvas_aa_offset") or 0),
-            launch_options=launch_options,
-        )
-    except (TypeError, ValueError):
-        return None
-    if (
-        persona.version != _CAMOUFOX_PERSONA_VERSION
-        or not persona.persona_id
-        or not persona.site
-        or not persona.channel_label
-        or not persona.created_utc
-        or not persona.screen_label
-        or persona.screen_width <= 0
-        or persona.screen_height <= 0
-        or persona.window_width <= 0
-        or persona.window_height <= 0
-        or persona.humanize_max_sec <= 0
-        or persona.history_length <= 0
-        or not persona.launch_options
-    ):
-        return None
-    return persona
-
-
-def _build_camoufox_persona(
-    *,
-    site: str,
-    channel_label: str,
-    profile_generation: int,
-    executable_path: Path | None,
-    now: datetime,
-) -> CamoufoxPersona:
-    resolved_executable_path = executable_path if executable_path is not None and executable_path.exists() else None
-    seed = _camoufox_persona_seed(
-        site=site,
-        channel_label=channel_label,
-        profile_generation=profile_generation,
-    )
-    rng = random.Random(seed)
-    screen_profile = _CAMOUFOX_PERSONA_WINDOWS[rng.randrange(len(_CAMOUFOX_PERSONA_WINDOWS))]
-    screen_width, screen_height = screen_profile["screen"]
-    window_width, window_height = rng.choice(screen_profile["windows"])
-    humanize_max_sec = round(rng.uniform(0.95, 1.45), 2)
-    history_length = rng.randint(2, 5)
-    font_spacing_seed = rng.randint(0, 1_073_741_823)
-    canvas_aa_offset = rng.randint(-18, 18)
-    config = {
-        "timezone": _CAMOUFOX_DEFAULT_TIMEZONE,
-        "window.history.length": history_length,
-        "fonts:spacing_seed": font_spacing_seed,
-        "canvas:aaOffset": canvas_aa_offset,
-        "canvas:aaCapOffset": True,
-    }
-    launch_options = camoufox_launch_options(
-        headless=False,
-        humanize=humanize_max_sec,
-        locale=_CAMOUFOX_DEFAULT_LOCALE,
-        os=_CAMOUFOX_DEFAULT_OS,
-        screen=_camoufox_screen_constraints(width=screen_width, height=screen_height),
-        window=(window_width, window_height),
-        config=config,
-        executable_path=resolved_executable_path,
-        i_know_what_im_doing=True,
-    )
-    return CamoufoxPersona(
-        version=_CAMOUFOX_PERSONA_VERSION,
-        persona_id=f"{site}-{channel_label}-g{profile_generation:03d}-{seed % 10000:04d}",
-        seed=seed,
-        site=site,
-        channel_label=channel_label,
-        profile_generation=profile_generation,
-        created_utc=now.isoformat(),
-        screen_label=str(screen_profile["label"]),
-        screen_width=screen_width,
-        screen_height=screen_height,
-        window_width=window_width,
-        window_height=window_height,
-        humanize_max_sec=humanize_max_sec,
-        history_length=history_length,
-        font_spacing_seed=font_spacing_seed,
-        canvas_aa_offset=canvas_aa_offset,
-        launch_options=launch_options,
-    )
-
-
-def _load_or_create_camoufox_persona(
-    *,
-    site: str,
-    channel_label: str,
-    profile_generation: int,
-    profile_root: Path,
-    executable_path: Path | None,
-    logger,
-) -> CamoufoxPersona:
-    persona_path = _camoufox_persona_path(profile_root)
-    if persona_path.exists():
-        try:
-            raw = json.loads(persona_path.read_text(encoding="utf-8"))
-        except Exception:
-            raw = None
-        if isinstance(raw, dict):
-            persona = _camoufox_persona_from_payload(raw)
-            if (
-                persona is not None
-                and persona.site == site
-                and persona.channel_label == channel_label
-                and persona.profile_generation == profile_generation
-            ):
-                return persona
-            logger.info(
-                "Camoufox persona file invalid or stale. site=%s channel=%s generation=%s file=%s",
-                site,
-                channel_label,
-                profile_generation,
-                persona_path,
-            )
-    persona = _build_camoufox_persona(
-        site=site,
-        channel_label=channel_label,
-        profile_generation=profile_generation,
-        executable_path=executable_path,
-        now=_utc_now(),
-    )
-    _write_json_atomic(persona_path, asdict(persona))
-    logger.info(
-        "Created Camoufox persona. site=%s channel=%s generation=%s persona=%s screen=%sx%s window=%sx%s humanize_max_sec=%s file=%s",
-        site,
-        channel_label,
-        profile_generation,
-        persona.persona_id,
-        persona.screen_width,
-        persona.screen_height,
-        persona.window_width,
-        persona.window_height,
-        persona.humanize_max_sec,
-        persona_path,
-    )
-    return persona
-
-
-def _label_to_channel(label: str) -> str | None:
-    _normalize_channel_label(label)
-    return None
-
-
-def _new_guard_site_entry() -> dict[str, object]:
-    return {
-        "strikes": 0,
-        "cooldown_until_utc": "",
-        "cooldown_profile_generation": "",
-        "last_reason": "",
-        "last_outcome_tier": "",
-        "last_outcome_code": "",
-        "last_outcome_detail": "",
-        "last_attempt_utc": "",
-        "last_success_utc": "",
-        "last_recovery_utc": "",
-        "last_valid_channel": "",
-        "last_attempt_channel": "",
-        "last_block_family": "",
-        "last_block_code": "",
-        "warmup_active": True,
-        "warmup_started_utc": "",
-        "warmup_completed_utc": "",
-        "warmup_failures": 0,
-        "warmup_last_failures": 0,
-        "consecutive_successes": 0,
-        "consecutive_failures": 0,
-        "consecutive_suspect": 0,
-        "consecutive_blocks": 0,
-        "last_cards_count": 0,
-        "last_quality": "",
-        "last_fallback_used": False,
-        "last_missing_title_pct": 0,
-        "last_missing_price_pct": 0,
-        "last_missing_location_pct": 0,
-        "last_missing_agency_pct": 0,
-        "probe_after_utc": "",
-        "probe_attempts": 0,
-        "profile_generation": 0,
-        "profile_created_utc": "",
-        "profile_rotated_utc": "",
-        "profile_quarantine_reason": "",
-    }
-
-
 def _load_guard_state(path: Path) -> dict:
-    default = {"version": _GUARD_STATE_VERSION, "last_channel": _DEFAULT_BROWSER_LABEL, "sites": {}}
-    try:
-        if not path.exists():
-            return default
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict):
-            return default
-        sites = raw.get("sites", {})
-        if not isinstance(sites, dict):
-            sites = {}
-        last_channel = _normalize_channel_label(raw.get("last_channel"))
-        if last_channel not in _CHANNEL_LABELS:
-            last_channel = _DEFAULT_BROWSER_LABEL
-        return {
-            "version": _GUARD_STATE_VERSION,
-            "last_channel": last_channel,
-            "sites": sites,
-        }
-    except Exception:
-        return default
-
-
-def _save_guard_state(path: Path, state: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(state, ensure_ascii=False, indent=2) + "\n"
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(payload, encoding="utf-8")
-    tmp.replace(path)
+    return _load_guard_state_impl(
+        path=path,
+        guard_state_version=_GUARD_STATE_VERSION,
+        default_browser_label=_DEFAULT_BROWSER_LABEL,
+        channel_labels=_CHANNEL_LABELS,
+        normalize_channel_label=_normalize_channel_label,
+    )
 
 
 def _prune_debug_artifacts(
@@ -660,198 +253,69 @@ def _prune_debug_artifacts(
     retention_sec: int = _LIVE_DEBUG_RETENTION_SEC,
     max_files: int = _LIVE_DEBUG_MAX_FILES,
 ) -> int:
-    if not debug_dir.exists():
-        return 0
-    now_ts = time.time() if now_epoch is None else float(now_epoch)
-    candidates: list[tuple[float, Path]] = []
-    for path in debug_dir.iterdir():
-        if not path.is_file():
-            continue
-        try:
-            stat = path.stat()
-        except OSError:
-            continue
-        candidates.append((float(stat.st_mtime), path))
-    if not candidates:
-        return 0
-
-    removed = 0
-    stale_cutoff = now_ts - max(0, int(retention_sec))
-    for mtime, path in list(candidates):
-        if mtime >= stale_cutoff:
-            continue
-        try:
-            path.unlink()
-            removed += 1
-        except OSError:
-            pass
-    if removed:
-        candidates = [(mtime, path) for mtime, path in candidates if path.exists()]
-
-    max_count = max(1, int(max_files))
-    if len(candidates) > max_count:
-        candidates.sort(key=lambda item: item[0], reverse=True)
-        for _, path in candidates[max_count:]:
-            try:
-                path.unlink()
-                removed += 1
-            except OSError:
-                pass
-
-    if removed:
-        logger.info(
-            "Pruned live debug artifacts. removed=%s dir=%s retention_sec=%s max_files=%s",
-            removed,
-            debug_dir,
-            retention_sec,
-            max_count,
-        )
-    return removed
-
-
-def service_runtime_site_slot_snapshot(
-    runtime: LiveFetchServiceRuntime,
-    *,
-    now_monotonic: float | None = None,
-) -> dict[str, dict[str, object]]:
-    now_value = time.monotonic() if now_monotonic is None else float(now_monotonic)
-    summary: dict[str, dict[str, object]] = {}
-    for slot in runtime.session_slots.values():
-        try:
-            reuse_count = int(getattr(slot, "reuse_count", 0) or 0)
-        except (TypeError, ValueError):
-            reuse_count = 0
-        try:
-            created_monotonic = float(getattr(slot, "created_monotonic", now_value) or now_value)
-        except (TypeError, ValueError):
-            created_monotonic = now_value
-        entry = summary.setdefault(
-            slot.site,
-            {
-                "site": slot.site,
-                "owner_count": 0,
-                "max_reuse_count": 0,
-                "max_age_sec": 0,
-                "channel_label": slot.channel_label,
-            },
-        )
-        entry["owner_count"] = int(entry["owner_count"]) + 1
-        entry["max_reuse_count"] = max(int(entry["max_reuse_count"]), reuse_count)
-        age_sec = max(0, int(now_value - created_monotonic))
-        entry["max_age_sec"] = max(int(entry["max_age_sec"]), age_sec)
-        if reuse_count >= int(entry["max_reuse_count"]):
-            entry["channel_label"] = slot.channel_label
-    return summary
+    return _prune_debug_artifacts_impl(
+        debug_dir=debug_dir,
+        logger=logger,
+        now_epoch=now_epoch,
+        retention_sec=retention_sec,
+        max_files=max_files,
+    )
 
 
 def _prune_guard_state_sites(state: dict, search_urls: list[str]) -> list[str]:
-    sites = state.get("sites")
-    if not isinstance(sites, dict):
-        state["sites"] = {}
-        return []
-    allowed_sites = {_site_key_from_url(url) for url in search_urls if url}
-    if not allowed_sites:
-        return []
-    removed = sorted(site for site in list(sites) if site not in allowed_sites)
-    for site in removed:
-        sites.pop(site, None)
-    return removed
-
-
-def _site_state(state: dict, site: str) -> dict:
-    sites = state.setdefault("sites", {})
-    entry = sites.get(site)
-    if not isinstance(entry, dict):
-        entry = _new_guard_site_entry()
-    for key, value in _new_guard_site_entry().items():
-        entry.setdefault(key, value)
-    sites[site] = entry
-    return entry
-
-
-def _profile_generation(entry: dict) -> int:
-    try:
-        value = int(entry.get("profile_generation") or 0)
-    except (TypeError, ValueError):
-        value = 0
-    return max(0, value)
-
-
-def _ensure_site_profile_tracking(entry: dict, now: datetime) -> bool:
-    changed = False
-    generation = _profile_generation(entry)
-    if generation != entry.get("profile_generation"):
-        entry["profile_generation"] = generation
-        changed = True
-    created_at = _parse_utc_iso(str(entry.get("profile_created_utc") or ""))
-    if created_at is None:
-        entry["profile_created_utc"] = now.isoformat()
-        changed = True
-    return changed
+    return _prune_guard_state_sites_impl(
+        state=state,
+        search_urls=search_urls,
+        site_key_from_url=_site_key_from_url,
+    )
 
 
 def _site_profile_age_sec(entry: dict, now: datetime) -> int:
-    created_at = _parse_utc_iso(str(entry.get("profile_created_utc") or ""))
-    if created_at is None:
-        return 0
-    return max(0, int((now - created_at).total_seconds()))
+    return _site_profile_age_sec_impl(entry=entry, now=now, parse_utc_iso=_parse_utc_iso)
 
 
 def _site_profile_rotation_age_cap_sec(site: str) -> int:
-    return max(0, int(_PROFILE_ROTATION_MAX_AGE_SEC.get(site, 0) or 0))
-
-
-def _rotate_site_profile(entry: dict, *, now: datetime, reason: str) -> tuple[int, int]:
-    previous_generation = _profile_generation(entry)
-    next_generation = previous_generation + 1
-    entry["profile_generation"] = next_generation
-    entry["profile_created_utc"] = now.isoformat()
-    entry["profile_rotated_utc"] = now.isoformat()
-    entry["profile_quarantine_reason"] = reason
-    return (previous_generation, next_generation)
+    return _site_profile_rotation_age_cap_sec_impl(site=site, rotation_caps=_PROFILE_ROTATION_MAX_AGE_SEC)
 
 
 def _maybe_rotate_site_profile(*, state: dict, site: str, now: datetime, logger) -> bool:
-    entry = _site_state(state, site)
-    changed = _ensure_site_profile_tracking(entry, now)
-    age_cap_sec = _site_profile_rotation_age_cap_sec(site)
-    if age_cap_sec <= 0:
-        return changed
-    profile_age_sec = _site_profile_age_sec(entry, now)
-    if profile_age_sec < age_cap_sec:
-        return changed
-    previous_generation, next_generation = _rotate_site_profile(
-        entry,
+    return _maybe_rotate_site_profile_impl(
+        state=state,
+        site=site,
         now=now,
-        reason="profile_age_cap",
+        logger=logger,
+        parse_utc_iso=_parse_utc_iso,
+        rotation_caps=_PROFILE_ROTATION_MAX_AGE_SEC,
     )
-    logger.info(
-        "Preemptive site profile rotation. site=%s previous_generation=%s next_generation=%s profile_age_sec=%s age_cap_sec=%s",
-        site,
-        previous_generation,
-        next_generation,
-        profile_age_sec,
-        age_cap_sec,
+
+
+def _cooldown_remaining_sec(state: dict, site: str, now: datetime) -> int:
+    return _cooldown_remaining_sec_impl(
+        state=state,
+        site=site,
+        now=now,
+        parse_utc_iso=_parse_utc_iso,
     )
-    return True
 
 
-def _site_profile_generation(state: dict | None, site: str) -> int:
-    if state is None:
-        return 0
-    return _profile_generation(_site_state(state, site))
+def _resolve_channel_executable_path(label: str) -> Path | None:
+    if _normalize_channel_label(label) != _DEFAULT_BROWSER_LABEL:
+        return None
+    try:
+        return Path(camoufox_launch_path())
+    except Exception:
+        return None
 
 
-def _is_warmup_entry(entry: dict) -> bool:
-    raw = entry.get("warmup_active")
-    if isinstance(raw, bool):
-        return raw
-    return not bool(str(entry.get("last_success_utc") or "").strip())
-
-
-def _guard_phase_label(entry: dict) -> str:
-    return "warmup" if _is_warmup_entry(entry) else "stable"
-
+async def _save_debug_artifacts(*, page, debug_dir: Path | None, site: str, reason: str, logger) -> None:
+    await _save_debug_artifacts_impl(
+        page=page,
+        debug_dir=debug_dir,
+        site=site,
+        reason=reason,
+        logger=logger,
+        normalize_func=_normalize,
+    )
 
 def _is_datadome_interstitial(*, current_url: str = "", html: str = "", body_text: str = "") -> bool:
     haystack = "\n".join([current_url, html, body_text]).lower()
@@ -868,30 +332,6 @@ def _blocked_family_from_outcome(outcome: FetchOutcome) -> str:
     if outcome.tier == "blocked":
         return "blocked"
     return ""
-
-
-def _cooldown_profile_generation(entry: dict) -> int | None:
-    raw = entry.get("cooldown_profile_generation")
-    if raw in ("", None):
-        return None
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return None
-    return max(0, value)
-
-
-def _cooldown_remaining_sec(state: dict, site: str, now: datetime) -> int:
-    entry = _site_state(state, site)
-    until = _parse_utc_iso(str(entry.get("cooldown_until_utc") or ""))
-    if until is None:
-        return 0
-    cooldown_generation = _cooldown_profile_generation(entry)
-    if cooldown_generation is not None and _profile_generation(entry) != cooldown_generation:
-        return 0
-    delta = int((until - now).total_seconds())
-    return delta if delta > 0 else 0
-
 
 def _build_default_risk_budget(*, search_urls: list[str], extraction: ExtractionFields) -> RiskBudget:
     return RiskBudget(
@@ -1487,20 +927,6 @@ def _apply_guard_outcome(
         hard_block_profile_reset_sites=_HARD_BLOCK_PROFILE_RESET_SITES,
     )
 
-
-def _save_guard_event_artifact(*, debug_dir: Path | None, site: str, event: str, payload: dict, logger) -> None:
-    if debug_dir is None:
-        return
-    try:
-        debug_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        path = debug_dir / f"{stamp}_{_slug(site)}_{_slug(event)}.json"
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        logger.info("Saved guard event artifact. file=%s", path)
-    except Exception as exc:
-        logger.debug("Unable to save guard event artifact (%s): %s", event, exc)
-
-
 def _log_guard_decision(
     *,
     logger,
@@ -1725,51 +1151,6 @@ async def _prune_site_session_slots(
         pacing_func=apply_interaction_pacing,
     )
 
-
-def _resolve_channel_executable_path(label: str) -> Path | None:
-    if _normalize_channel_label(label) != _DEFAULT_BROWSER_LABEL:
-        return None
-    try:
-        return Path(camoufox_launch_path())
-    except Exception:
-        return None
-
-
-def _camoufox_launch_kwargs(
-    *,
-    headless: bool,
-    executable_path: Path | None,
-    persistent_profile_dir: Path | None = None,
-    persona: CamoufoxPersona | None = None,
-) -> dict[str, object]:
-    if persona is not None:
-        launch_kwargs = json.loads(json.dumps(persona.launch_options))
-        launch_kwargs["headless"] = headless
-        if persistent_profile_dir is not None:
-            launch_kwargs["persistent_context"] = True
-            launch_kwargs["user_data_dir"] = str(persistent_profile_dir)
-        if executable_path is not None:
-            launch_kwargs["executable_path"] = str(executable_path)
-        return launch_kwargs
-    launch_kwargs: dict[str, object] = {
-        "headless": headless,
-        "humanize": True,
-        "locale": _CAMOUFOX_DEFAULT_LOCALE,
-        "os": _CAMOUFOX_DEFAULT_OS,
-        "screen": _camoufox_screen_constraints(),
-        # The scraper targets Italian housing portals, so we keep the Intl timezone
-        # aligned with the default locale/profile instead of leaking a generic host value.
-        "config": {"timezone": _CAMOUFOX_DEFAULT_TIMEZONE},
-        "i_know_what_im_doing": True,
-    }
-    if persistent_profile_dir is not None:
-        launch_kwargs["persistent_context"] = True
-        launch_kwargs["user_data_dir"] = str(persistent_profile_dir)
-    if executable_path is not None:
-        launch_kwargs["executable_path"] = str(executable_path)
-    return launch_kwargs
-
-
 async def _launch_browser_session(
     *,
     pw,
@@ -1890,116 +1271,6 @@ async def _launch_browser_session(
     if launch_error is not None:
         raise launch_error
     raise RuntimeError(f"Unable to start browser context for site={site}.")
-
-
-def _is_channel_available(label: str) -> bool:
-    return _resolve_channel_executable_path(label) is not None
-
-
-def _slug(value: str) -> str:
-    out = []
-    for ch in (value or "").lower():
-        if ch.isalnum():
-            out.append(ch)
-        elif ch in {"-", "_"}:
-            out.append(ch)
-        else:
-            out.append("-")
-    slug = "".join(out).strip("-")
-    while "--" in slug:
-        slug = slug.replace("--", "-")
-    return slug or "n-a"
-
-
-def _profile_dir_for_channel(base_dir: Path, channel_label: str) -> Path:
-    """
-    Keep isolated user-data dirs per browser identity.
-    """
-    base_name = base_dir.name.strip().lower()
-    if base_name == channel_label:
-        return base_dir
-    if base_name in _CHANNEL_LABELS:
-        return base_dir.parent / channel_label
-    return base_dir / channel_label
-
-
-def _profile_dir_for_site(base_dir: Path, site: str) -> Path:
-    base_name = base_dir.name.strip().lower()
-    site_slug = _slug(site)
-    if base_name == site_slug:
-        return base_dir
-    if base_name in _CHANNEL_LABELS:
-        return base_dir.parent / site_slug
-    return base_dir / site_slug
-
-
-def _profile_dir_for_site_channel(
-    base_dir: Path,
-    site: str,
-    channel_label: str,
-    profile_generation: int = 0,
-) -> Path:
-    site_root = _profile_dir_for_site(base_dir, site)
-    generation = max(0, int(profile_generation or 0))
-    if generation > 0:
-        site_root = site_root / f"gen-{generation:03d}"
-    return _profile_dir_for_channel(site_root, channel_label)
-
-
-def _session_profile_root(
-    profile_dir: str | None,
-    site: str,
-    channel_label: str,
-    profile_generation: int = 0,
-) -> Path | None:
-    if not profile_dir:
-        return None
-    return _profile_dir_for_site_channel(
-        Path(profile_dir).expanduser(),
-        site,
-        channel_label,
-        profile_generation=profile_generation,
-    )
-
-
-def _session_owner_key(*, site: str, channel_label: str, profile_root: Path | None) -> str:
-    profile_part = str(profile_root) if profile_root is not None else "ephemeral"
-    return f"{site}|{channel_label}|{profile_part}"
-
-
-def _session_identity(
-    *,
-    site: str,
-    channel_label: str,
-    profile_dir: str | None,
-    profile_generation: int = 0,
-) -> tuple[str, Path | None]:
-    profile_root = _session_profile_root(
-        profile_dir,
-        site,
-        channel_label,
-        profile_generation=profile_generation,
-    )
-    return (_session_owner_key(site=site, channel_label=channel_label, profile_root=profile_root), profile_root)
-
-
-async def _save_debug_artifacts(*, page, debug_dir: Path | None, site: str, reason: str, logger) -> None:
-    if debug_dir is None:
-        return
-    try:
-        debug_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        stem = f"{stamp}_{_slug(site)}_{_slug(reason)}"
-        html_path = debug_dir / f"{stem}.html"
-        png_path = debug_dir / f"{stem}.png"
-        title = _normalize(await page.title())
-        html = await page.content()
-        header = f"<!-- url: {page.url}\n title: {title}\n reason: {reason}\n -->\n"
-        html_path.write_text(header + html, encoding="utf-8")
-        await page.screenshot(path=str(png_path), full_page=True)
-        logger.info("Saved live debug artifacts. html=%s screenshot=%s", html_path, png_path)
-    except Exception as exc:
-        logger.debug("Unable to save debug artifacts (%s): %s", reason, exc)
 
 
 def _guess_ad_id(url: str) -> str:
