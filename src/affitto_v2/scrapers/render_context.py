@@ -31,7 +31,6 @@ def build_render_context_init_script(hardware: HardwareMimetics) -> str:
     });
   };
 
-  defineNavigatorValue('deviceMemory', __DEVICE_MEMORY__);
   defineNavigatorValue('hardwareConcurrency', __HARDWARE_CONCURRENCY__);
   defineNavigatorValue('userAgent', __USER_AGENT__);
 
@@ -141,8 +140,7 @@ def build_render_context_init_script(hardware: HardwareMimetics) -> str:
 })();
 """.strip()
     return (
-        script.replace("__DEVICE_MEMORY__", str(hardware.device_memory))
-        .replace("__HARDWARE_CONCURRENCY__", str(hardware.hardware_concurrency))
+        script.replace("__HARDWARE_CONCURRENCY__", str(hardware.hardware_concurrency))
         .replace("__USER_AGENT__", repr(hardware.user_agent))
         .replace("__WEBGL_VENDOR__", repr(hardware.webgl_vendor))
         .replace("__WEBGL_RENDERER__", repr(hardware.webgl_renderer))
@@ -152,8 +150,7 @@ def build_render_context_init_script(hardware: HardwareMimetics) -> str:
 GLOBAL_RENDER_CONTEXT_INIT_SCRIPT = build_render_context_init_script(
     HardwareMimetics(
         user_agent=(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:135.0) Gecko/20100101 Firefox/135.0"
         ),
         device_memory=16,
         hardware_concurrency=8,
@@ -175,8 +172,7 @@ async def install_render_context_init_script(
 ) -> None:
     selected_hardware = hardware or HardwareMimetics(
         user_agent=(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:135.0) Gecko/20100101 Firefox/135.0"
         ),
         device_memory=16,
         hardware_concurrency=8,
@@ -186,9 +182,8 @@ async def install_render_context_init_script(
     await context.add_init_script(script=build_render_context_init_script(selected_hardware))
     if logger is not None:
         logger.info(
-            "Installed render context init script. navigator_user_agent=%s navigator_device_memory=%s navigator_hardware_concurrency=%s webgl_vendor=%s webgl_renderer=%s canvas_noise=%s",
+            "Installed render context init script. navigator_user_agent=%s navigator_hardware_concurrency=%s webgl_vendor=%s webgl_renderer=%s canvas_noise=%s",
             selected_hardware.user_agent,
-            selected_hardware.device_memory,
             selected_hardware.hardware_concurrency,
             selected_hardware.webgl_vendor,
             selected_hardware.webgl_renderer,

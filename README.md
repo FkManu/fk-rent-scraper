@@ -1,57 +1,38 @@
-# Scraper Affitto 2.2.2
+# Scraper Affitto 2.3_test
 
-La cartella resta `2.2_test`, ma a questo punto va trattata come root di lavoro della release `2.2.2 refactorizzata`.
+La cartella `2.3_test` e la nuova root di lavoro aperta come copia completa e separata di `2.2_test`.
 
-Non e la baseline storica `2.1_stable`.
-`2.1_stable` resta la baseline di provenienza; `2.2_test` contiene la linea che oggi pubblichiamo come `2.2.2 refactorizzata`.
+## Punto di partenza
+Al momento del taglio:
+- il codice prodotto e inizialmente allineato alla baseline `2.2.2 refactorizzata`
+- `2.2_test` resta la linea di riferimento appena congelata come `2.2 stable`
+- `2.3_test` serve per aprire la prossima iterazione senza contaminare l'ambiente `2.2`
 
-Questa linea esiste per consolidare:
-- `camoufox` come backend operativo del ramo
-- continuita di sessione per sito
-- servizio continuo `fetch-live-service`
-- riduzione del rumore interazionale
-- precisione crescente del filtro `private_only`
+## Cosa cambia davvero al taglio
+- ambiente locale separato
+- documentazione viva riallineata alla nuova linea
+- archivio interno del contesto `2.2`
 
-## Stato attuale
-- backend predefinito: `camoufox`
-- GUI e CLI allineate allo stesso backend
-- servizio continuo reale sopra il one-shot
-- soak VM del `2026-03-26` stabile
-- fix recente sulla memoria negativa `private_only` per i professionali scoperti da detail-check
-- fix del `2026-03-27` sul conteggio `detail_touch_count` di `idealista`, che evitava cooldown artificiali da errore interno
-- hardening del `2026-03-27` sulla continuita di profilo:
-  - `hard_block` => rotazione profilo persistente su `immobiliare` e `idealista`
-  - rotazione preventiva a `24h` attiva solo su `immobiliare`
-- hardening del `2026-03-27` sulla profile identity:
-  - persona Camoufox persistente per `site/channel/profile_generation`
-  - stessa generazione => stessi parametri di launch principali
-- hardening del `2026-03-28` su osservabilita:
-  - log dettagliati su render context init, pacing Gamma, bootstrap static resources e chiusura sessione
-- refactor del `2026-03-30`:
-  - `live_fetch.py` separato in moduli `browser/guard/sites`
-  - session policy per sito
-  - state machine tabellare
-  - launch path `fresh/reused`
-  - destroy del vecchio profilo persistente su `hard_block`
-- fix successivo del `2026-03-30`:
-  - `accept_cookies` policy-aware per sito
-  - `guard_jitter_*` integrati come clipping del Gamma pacing
-- GUI aggiornata con `Modalita debugger` per salvare artifact in `runtime/debug` o `./debug` accanto alla dist
+## Cosa non cambia ancora
+- nessuna modifica intenzionale al codice prodotto al momento della creazione della root
+- backend operativo ancora `camoufox`
+- tooling, packaging e test ereditati dalla baseline `2.2`
 
 ## Read this first
 1. `docs/context/README.md`
 2. `docs/context/HANDOFF.md`
 3. `docs/context/NEXT_STEPS.md`
 4. `docs/context/codex/OUTPUT_CURRENT.md`
-5. `docs/risk_scoring_e_griglia_segnali_antibot.md`
+5. `docs/repo_summary.md`
+6. `docs/risk_scoring_e_griglia_segnali_antibot.md`
 
 ## Regola pratica
-Non usare questa root come sandbox generico.
+Questa root non nasce per rifare da zero la strategia live.
 
-Ogni patch qui dovrebbe fare almeno una di queste cose:
-- ridurre rumore
-- aumentare continuita
-- migliorare in modo misurabile `private_only`
+Ogni patch in `2.3_test` dovrebbe:
+- preservare la baseline `2.2`
+- cambiare un solo asse alla volta
+- restare misurabile su run comparabili
 
 ## Quick start
 1. Crea e attiva una virtualenv.
@@ -73,21 +54,16 @@ python run.py init-config
 python run.py doctor
 ```
 
-I file runtime locali vengono creati sotto `runtime/` e non fanno parte della repo.
+I file runtime locali vengono creati sotto `runtime/` e non fanno parte del perimetro Git pulito.
 
 ## Browser default
-Il backend live predefinito della release `2.2.2 refactorizzata` resta `camoufox`.
+Il backend operativo ereditato dalla baseline resta `camoufox`.
 
 Note operative:
 - root profili persistenti di default: `runtime/camoufox-profile`
 - la CLI live accetta `--browser-channel auto|camoufox`
-- il launch predefinito usa fingerprint Windows umanizzato con `locale=it-IT`, `timezone=Europe/Rome` e `screen=1920x1080`
-- il backend reale del ramo resta uno solo: `camoufox`
-- i profili persistenti sono ora versionati per `site/channel/profile_generation` quando il guard decide di ruotare identita
-- `Milestone 3 / Real Browser Assisted` non e piu una direzione attiva del ramo
-- il prossimo hardening previsto non e multi-browser ma:
-  - validazione soak VM della release refactorizzata
-  - `immobiliare adaptive prepare`
+- il launch predefinito usa `locale=it-IT`, `timezone=Europe/Rome` e `screen=1920x1080`
+- `Milestone 3 / Real Browser Assisted` non e una direzione attiva della linea
 
 ## Continuous live mode
 Comando principale di soak:
@@ -115,22 +91,12 @@ Per saltare il fetch browser:
 powershell -ExecutionPolicy Bypass -File .\scripts\setup_test_env.ps1 -SkipCamoufoxFetch
 ```
 
-Lo script standard esegue `python -m camoufox fetch`.
-
-## Windows stable bundle
-Build del bundle:
+## Build bundle `2.3_test`
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-packaging.txt
 powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_bundle.ps1
 ```
 
-Il bundle stable mantiene:
-- GUI -> default `camoufox`
-- CLI companion -> default `camoufox`
-- runtime bundle-aware -> `%LOCALAPPDATA%\AffittoV2\runtime`
-- zip di release corrente -> `dist/affitto_2_2_2_refactorizzata_bundle.zip`
-
-## Compatibilita
-I comandi applicativi ereditati da `2.1_stable` restano validi.
-Quello che cambia qui non e il wiring base della CLI, ma la strategia live e il lifecycle documentati in `docs/context/`.
+Prima dist della linea `2.3_test`:
+- `dist/affitto_2_3_test_bundle.zip`

@@ -17,8 +17,8 @@ $CliExe = Join-Path $DistRoot "affitto_cli.exe"
 $CliTarget = Join-Path $GuiDist "affitto_cli.exe"
 $LegacyPreviewZip = Join-Path $DistRoot "affitto_2_2_preview_bundle.zip"
 $LegacyStableZip = Join-Path $DistRoot "affitto_2_2_stable_bundle.zip"
-$StableZip = Join-Path $DistRoot "affitto_2_2_2_refactorizzata_bundle.zip"
-$ZipTarget = $StableZip
+$ReleaseZip = Join-Path $DistRoot "affitto_2_3_test_bundle.zip"
+$ZipTarget = $ReleaseZip
 
 Write-Host "Python:" $Python
 Write-Host "Root:" $Root
@@ -29,14 +29,14 @@ if (Test-Path $GuiDist) {
 if (Test-Path $CliExe) {
     Remove-Item $CliExe -Force
 }
-if (Test-Path $StableZip) {
+if (Test-Path $ReleaseZip) {
     try {
-        Remove-Item $StableZip -Force
+        Remove-Item $ReleaseZip -Force
     }
     catch {
         $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-        $ZipTarget = Join-Path $DistRoot ("affitto_2_2_2_refactorizzata_bundle_" + $stamp + ".zip")
-        Write-Warning "Stable zip locked, fallback target: $ZipTarget"
+        $ZipTarget = Join-Path $DistRoot ("affitto_2_3_test_bundle_" + $stamp + ".zip")
+        Write-Warning "Release zip locked, fallback target: $ZipTarget"
     }
 }
 if (Test-Path $LegacyPreviewZip) {
@@ -95,4 +95,4 @@ Write-Host ""
 Write-Host "Bundle pronto:" $GuiDist
 Write-Host "GUI exe:" (Join-Path $GuiDist "affitto_gui.exe")
 Write-Host "CLI companion:" $CliTarget
-Write-Host "Stable zip:" $ZipTarget
+Write-Host "Release zip:" $ZipTarget

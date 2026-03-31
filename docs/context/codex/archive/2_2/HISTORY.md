@@ -1,19 +1,5 @@
 # HISTORY.md
 
-## Patch aperte nella `2.3_test`
-- `2.3-patch-01` (`2026-03-31`): allineamento UA/TLS Firefox/135.0 + rimozione patch `navigator.deviceMemory`
-  - `session_policy.py`: Chrome/134 → Firefox/135.0
-  - `render_context.py`: UA aggiornato, deviceMemory rimosso dal template JS
-  - stato: applicata, in attesa di soak
-
-## Patch chiuse che definiscono l'apertura della `2.3_test`
-- cutover del `2026-03-30`:
-  - nuova root `2.3_test` creata come copia completa di `2.2_test`
-  - archivio interno del contesto `2.2` creato sotto `docs/context/archive/2_2/`
-  - archivio interno del workflow Codex `2.2` creato sotto `docs/context/codex/archive/2_2/`
-  - documentazione viva riallineata alla nuova linea `2.3`
-  - nessun cambio intenzionale del codice prodotto nella patch di taglio
-
 ## Patch chiuse che definiscono questa baseline
 - Milestone 1 email / SMTP / GUI
 - packaging Windows con primo bundle stabile

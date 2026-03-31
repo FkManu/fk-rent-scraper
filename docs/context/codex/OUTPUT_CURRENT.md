@@ -1,286 +1,40 @@
 # OUTPUT_CURRENT.md
 
 ## Patch corrente
-Session/profile hardening aggiornato + refactor strutturale:
-- consolidamento della linea `camoufox`
-- fix memoria negativa `private_only`
-- fix `idealista` sul `detail_touch_count`
-- review del `hard_block` reale su `immobiliare`
-- rotazione profilo persistente guidata dal guard
-- persona Camoufox persistente per generazione profilo
-- modalita GUI `debugger` bundle-aware
-- cleanup CLI/core `camoufox-only`
-- render context deterministico cross-host
-- adaptive interaction pacing
-- static resources bootstrap nel setup browser
-- session policy esplicita per sito
-- state machine tabellare estratta
-- modularizzazione `browser/guard/sites`
-- alleggerimento ulteriore di `live_fetch.py` con estrazione di types/store/persona/artifacts
-- ricostruzione bundle Windows stable per i prossimi soak
-- riallineamento docs e memoria agente
-- review comparativa `idealista` vs `immobiliare` sul soak del `2026-03-27`
-- definizione delle prossime slice operative:
-  - `immobiliare adaptive prepare`
-  - notifica blocco lungo + recovery
-  - eventuale `soft mode` locale post-block
+`2.3-patch-01` - Allineamento UA/TLS Firefox/135.0 + rimozione patch `navigator.deviceMemory`.
 
 ## Stato
-`camoufox` resta il backend unico del ramo.
-La linea `2.2.2 refactorizzata` gira nella root tecnica `2.2_test` ed e ora nella fase di hardening dell'identita persistente piu che di puro motore.
-Le prossime patch sensate sono orientate a stabilita, osservabilita e riallineamento dei contratti residui del refactor, non a spoofing avanzato.
+Patch applicata. Codice verificato. In attesa di soak su sessione reale.
 
-## Implementazione eseguita
-- backend browser predefinito portato a `camoufox`
-- percorso CLI live ristretto a `--browser-channel auto|camoufox`
-- launch Camoufox con profilo Windows umanizzato:
-  - `humanize=True`
-  - `locale=it-IT`
-  - `timezone=Europe/Rome`
-  - `screen=1920x1080`
-- root profili persistenti riallineata a `runtime/camoufox-profile`
-- GUI riallineata al nuovo default backend
-- setup Windows aggiornato per eseguire `python -m camoufox fetch`
-- spec di packaging aggiornate per includere dipendenze `camoufox`
-- servizio continuo confermato come percorso operativo reale del ramo
-- soak VM reale documentato in `docs/tmp_logs.md`
-- memoria negativa `private_only` introdotta nel DB per i professionali trovati dal detail-check
-- fix chiuso sul `detail_touch_count` Idealista che poteva produrre `unexpected_error` e cooldown artificiale
-- coercizione osservabile del `detail_touch_count` con warning se il contratto dovesse rompersi di nuovo
-- nuovo `guard state` con campi profilo:
-  - `profile_generation`
-  - `profile_created_utc`
-  - `profile_rotated_utc`
-  - `profile_quarantine_reason`
-- `hard_block` => rotazione profilo persistente sia per `immobiliare` sia per `idealista`
-- rotazione preventiva a `24h` abilitata solo per `immobiliare`
-- root profilo effettiva derivata da `site/channel/profile_generation`
-- persona Camoufox persistente per `site/channel/profile_generation` salvata accanto al profilo
-- il cooldown resta legato alla generazione che ha preso il `hard_block`, quindi la generazione nuova puo rilanciare al ciclo successivo
-- i log `Site guard` mostrano ora anche `profile_generation`, `profile_age_sec`, `cooldown_generation` e un evento esplicito `Profile identity rotated`
-- riuso delle `launch_options` materializzate di Camoufox per evitare cambio implicito di fingerprint/config a ogni relaunch
-- variazioni realistiche ma controllate:
-  - stessa base `windows` / `it-IT` / `Europe/Rome`
-  - finestra desktop plausibile dentro `1920x1080`
-  - `humanize_max_sec`, `window.history.length`, `fonts:spacing_seed`, `canvas:aaOffset` stabili per la stessa generazione
-- logging del `persona_id` e dei principali parametri persona al launch persistente
-- GUI con checkbox `Modalita debugger`
-- `--save-live-debug` passato da GUI sia a `Run Once` sia a `fetch-live-service`
-- artifact debug bundle-aware:
-  - da sorgente -> `runtime/debug`
-  - da dist -> `./debug` accanto agli eseguibili
-- nuova dist pronta:
-  - `dist/affitto_gui/affitto_gui.exe`
-  - `dist/affitto_gui/affitto_cli.exe`
-  - `dist/affitto_2_2_2_refactorizzata_bundle.zip`
-- build script reso tollerante ai lock del vecchio `.zip` stable
-- CLI live ridotta a `--browser-channel auto|camoufox`
-- default CLI dei debug artifact riallineato a `runtime/debug`
-- rimosso `--channel-rotation-mode` dal percorso operativo
-- rimosso anche dal comando GUI il vecchio flag `--channel-rotation-mode`
-- rimosso dal core il ramo di alternate-browser retry non piu strategico per il ramo `camoufox-only`
-- nuovo modulo `render_context.py` con `init_script` globale sul `BrowserContext`
-- browser descriptors stabilizzati nel contesto pagina:
-  - `navigator.deviceMemory=16`
-  - `navigator.hardwareConcurrency=8`
-  - WebGL vendor `Intel Inc.`
-  - WebGL renderer `Intel(R) Iris(TM) Graphics Xe`
-- `HTMLCanvasElement.toDataURL()` riallineato con `static noise` deterministico per ridurre differenze cross-host
-- introdotto `apply_interaction_pacing()` con distribuzione `Gamma(shape=2.0, scale=1.5)`
-- pacing asincrono applicato prima di:
-  - `page.goto`
-  - `click` tecnici Playwright
-  - chiusura `context/browser`
-- introdotto `bootstrap_static_resources_cache()` nel setup del `BrowserContext`
-- warm-up tecnico su:
-  - `https://www.gstatic.com/generate_204`
-  - `https://www.google.it/generate_204`
-  - `https://www.cloudflare.com/cdn-cgi/trace`
-- bootstrap eseguito su pagina temporanea dedicata e chiusa prima di consegnare la `page` operativa
-- logging dettagliato aggiunto su:
-  - installazione render context
-  - pacing Gamma con `reason` e delay
-  - bootstrap endpoint-by-endpoint
-  - click tecnici e chiusura sessione
-- refactor strutturale eseguito:
-  - `browser/session_policy.py` con firma hardware, `user_agent`, pacing Gamma e bootstrap URLs per sito
-  - `browser/bootstrap.py` con `apply_interaction_pacing()` e `bootstrap_static_resources_cache()`
-  - `browser/factory.py` con `close/prune/destroy` del runtime browser
-  - `guard/state_machine.py` con transizioni tabellari `healthy/suspect/degraded/cooldown/blocked/challenge_seen`
-  - `sites/idealista.py` e `sites/immobiliare.py` per costanti e helper sito-specifici
-  - `live_fetch.py` mantenuto come orchestratore
-- seconda slice di scomposizione eseguita senza cambiare comportamento:
-  - `core_types.py` con dataclass e contratti runtime
-  - `guard/store.py` con load/save/prune/profile helpers del guard
-  - `browser/persona.py` con persona Camoufox, profili e session identity
-  - `debug_artifacts.py` con slug e helper artifact/debug
-  - `live_fetch.py` mantiene wrapper locali per i nomi privati gia usati nei test
-- `render_context.py` ora genera l'`init_script` dal profilo hardware della session policy
-- il launch path logga esplicitamente:
-  - acquisizione identita `fresh`
-  - riuso identita `reused`
-  - preparazione della pagina post-bootstrap
-- `hard_block` ora applica anche disposition del profilo persistente bloccato:
-  - chiusura slot sito
-  - distruzione sicura del profilo vecchio sotto la root gestita
-- review di coerenza completata sul contratto blocchi/profilo:
-  - `hard_block` continua a ruotare `profile_generation`
-  - `interstitial_datadome` resta cooldown/probe sulla stessa identity
-- drift post-refactor chiusi:
-  - pacing cookie riallineato alla policy del sito corrente
-  - `guard_jitter_*` reintegrati come clipping numerico del Gamma pacing
-  - log `Interaction pacing clipped` aggiunto quando i bound operativi correggono il delay
-- il monolite residuo di `live_fetch.py` si concentra ora soprattutto in:
-  - challenge/page flow
-  - extraction quality + parser drift
-  - orchestrazione di `fetch_live_once()`
-- bundle Windows target aggiornato a `2.2.2 refactorizzata`
-- documentazione di contesto ripulita e riallineata al ruolo della nuova release
+Backend operativo: `camoufox`. State machine, pacing, guard, profili: invariati.
 
-## Stato operativo osservato in VM
-- finestra osservata: `2026-03-26 11:59:51` -> `2026-03-26 16:55:19`
-- comando usato: `affitto_cli.exe fetch-live-service ... --browser-channel camoufox ...`
-- cicli completati: `60`
-- outcome osservati:
-  - `healthy`: `240`
-  - `degraded`: `0`
-  - `blocked`: `0`
-  - `cooling`: `0`
-  - `assist_required`: `0`
-  - `ERROR`: `0`
-  - `Traceback`: `0`
-- servizio:
-  - sempre `stable`
-  - `runtime disposition=keep` in `56` cicli
-  - `recycle_site_slot` in `4` cicli
-  - nessun `recycle_runtime`
-  - nessun `stop_service`
+## Implementazione eseguita nella patch
 
-## Stato operativo osservato in VM il 2026-03-27
-- file di riferimento:
-  - `docs/tmp_logs.md`
-  - `dist/affitto_gui/debug/20260327T210522Z_idealista_blocked_hard_block.json`
-  - `dist/affitto_gui/debug/20260327T211033Z_idealista_healthy_ok.json`
-  - `dist/affitto_gui/debug/20260327T212541Z_immobiliare_blocked_hard_block.json`
-  - `dist/affitto_gui/debug/20260327T213042Z_immobiliare_healthy_ok.json`
-- finestra osservata: `2026-03-27 22:00:17` -> `2026-03-27 23:30:29`
-- summary di run:
-  - `19` cicli osservati
-  - `17` cicli completamente `healthy`
-  - `2` cicli con `blocked=1`
-  - `2` eventi `Profile identity rotated`
-  - `2` recovery complete sulla nuova generazione profilo
-- lettura utile:
-  - `idealista` ha preso un `hard_block` reale e ha recuperato su `gen-001`
-  - `immobiliare` ha preso un `hard_block` reale e ha recuperato su `gen-001`
-  - il fix su `cooldown_profile_generation` si e comportato bene:
-    - il cooldown e rimasto associato alla generazione bloccata
-    - la generazione nuova ha rilanciato senza restare congelata
-  - in questa finestra `immobiliare` non risulta drasticamente peggiore di `idealista`:
-    - entrambi i siti hanno preso un solo `hard_block`
-    - entrambi hanno recuperato al ciclo utile successivo
-  - il problema residuo non e il freeze del servizio ma il tasso con cui i siti accumulano rischio nel tempo
-
-## Lettura tecnica utile
-- `idealista` tiene molto bene la sessione lunga su `camoufox`
-- `immobiliare` lavora bene ma ha mostrato un vero `hard_block` quando l'identita persistente e rimasta viva troppo a lungo
-- la distinction locale vs globale del runtime sta quindi funzionando:
-  - si preserva il runtime condiviso
-  - si ricrea solo lo slot del sito quando la policy prudente lo richiede
-- la review log ha chiarito anche una seconda distinction:
-  - `browser slot recycle` non equivale a `identity reset`
-  - quando serve cambiare reputazione percepita dal sito, va ruotato il profilo persistente
-- con questa slice, anche il semplice relaunch dello stesso profilo evita di rigenerare una faccia leggermente diversa a ogni avvio
-- la review comparativa del `2026-03-27` chiarisce anche che:
-  - `immobiliare` non viene stressato da retry o detail-touch piu pesanti di `idealista`
-  - il ramo piu "costoso" lato interazioni resta `idealista`, per via del detail-check `private_only`
-  - la differenza concreta di flow tra i due siti oggi sta soprattutto nella `prepare phase`:
-    - `immobiliare` -> eventuale click `switch-to-list` + scroll su container risultati
-    - `idealista` -> attesa risultati + scroll pagina piu semplice
-  - l'umanizzazione in pagina e ancora minima e meccanica:
-    - scroll fissi
-    - pause fisse
-    - click tecnici su popup/list switch
-  - i `hard_block` del soak passano comunque da DataDome gia in `after_goto`, quindi non vanno attribuiti in modo automatico al solo scroll
-
-## File toccati
-- `src/affitto_v2/scrapers/live_fetch.py`
+### File modificati
 - `src/affitto_v2/scrapers/browser/session_policy.py`
-- `src/affitto_v2/scrapers/browser/bootstrap.py`
-- `src/affitto_v2/scrapers/browser/factory.py`
-- `src/affitto_v2/scrapers/guard/state_machine.py`
-- `src/affitto_v2/scrapers/sites/idealista.py`
-- `src/affitto_v2/scrapers/sites/immobiliare.py`
+  - `_DEFAULT_USER_AGENT`: Chrome/134 -> Firefox/135.0
 - `src/affitto_v2/scrapers/render_context.py`
-- `tests/test_static_resource_bootstrap.py`
-- `tests/test_session_policy_and_state_machine.py`
-- `src/affitto_v2/gui_app.py`
-- `src/affitto_v2/main.py`
-- `scripts/build_windows_bundle.ps1`
-- `tests/test_render_context.py`
-- `tests/test_interaction_pacing.py`
-- `tests/test_private_only_and_logging.py`
-- `docs/context/codex/ACTIVE_PATCH.md`
-- `docs/context/codex/OUTPUT_CURRENT.md`
-- `docs/context/codex/HISTORY.md`
+  - `HardwareMimetics` inline (x2): UA Chrome -> Firefox/135.0
+  - rimossa `defineNavigatorValue('deviceMemory', ...)` dal template JS
+  - rimossa sostituzione `__DEVICE_MEMORY__` nel builder
+  - rimosso campo `navigator_device_memory` dal log
 
-## Limiti residui
-- il problema aperto piu concreto oggi non e la tenuta del motore ma la qualita dell'identita persistente che presentiamo e la sua osservabilita
-- una prima correzione strutturale e gia stata chiusa:
-  - gli annunci professionali trovati dal detail-check Idealista vengono ora persistiti in una cache negativa dedicata
-  - questo dovrebbe ridurre il pattern osservato nei log in cui gli stessi `ad_id` professionali venivano riaperti a ogni ciclo
-- nei log VM il warning `guarantee_private_only=False` resta il principale punto di attenzione
-- la nuova rotazione profilo va ancora validata in soak reale
-- il realism attuale resta prudente:
-  - schermo base ancora `1920x1080`
-  - niente geolocation o proxy spoofing non ancorati a IP reale
-  - niente variazione artificiale di browser stack
-- il core conserva ancora residui legacy non allineati al ramo `camoufox-only`:
-  - alcuni campi/telemetrie storiche di assistenza ancora presenti come compatibilita interna
-- il refactor grosso di `live_fetch.py` e stato chiuso e i drift immediati sono stati corretti
-- il limite successivo non e piu interno al refactor, ma la validazione soak del comportamento reale in VM
-- la GUI bundle e il companion CLI sono coerenti col nuovo backend, ma il flusso interattivo end-to-end da bundle resta meno verificato del soak CLI/servizio
-- le prossime patch desiderabili sono oggi queste:
-  - `immobiliare adaptive prepare`:
-    - niente `switch-to-list` se non necessario
-    - scroll condizionale e non piu fisso
-  - notifica quando un sito entra in blocco lungo `>= 1h`, con prossimo tentativo e recovery successiva
-  - eventuale `soft mode` locale per `1-2` cicli solo sul sito che ha appena preso `hard_block`
-- non e invece in scope aprire patch dedicate a:
-  - spoofing avanzato di fingerprint hardware/GPU oltre il perimetro statico gia codificato per coerenza cross-host
-  - jitter di rete artificiale per asset/request oltre il pacing applicato alle interazioni Playwright
-  - session pre-heating su domini esterni
-  - estensioni non necessarie della normalizzazione grafica oltre il perimetro deterministico gia chiuso
+### Motivazione
+camoufox e Firefox-based. Il TLS fingerprint e Firefox. Dichiarare Chrome/134 come UA creava un mismatch rilevabile passivamente (JA4, DataDome, Cloudflare). `navigator.deviceMemory` e una proprieta Chrome-only: patcharla su Firefox segnalava un'ulteriore anomalia JS.
 
-## Come verificare
-- da `C:\\Users\\panda\\Desktop\\sboorrra\\affitto\\2.2_test`:
-- `.\\.venv\\Scripts\\python.exe -m unittest tests.test_private_only_and_logging`
-- `.\\.venv\\Scripts\\python.exe -m unittest tests.test_render_context`
-- `.\\.venv\\Scripts\\python.exe -m unittest tests.test_interaction_pacing`
-- `.\\.venv\\Scripts\\python.exe -m unittest tests.test_static_resource_bootstrap`
-- `.\\.venv\\Scripts\\python.exe -m unittest tests.test_session_policy_and_state_machine`
-- `.\\.venv\\Scripts\\python.exe -m unittest discover -s tests`
-- esito locale attuale: `81` test `OK`
-- in VM:
-  - eseguire `python -m camoufox fetch` o provisioning equivalente
-  - lanciare `fetch-live-service`
-  - verificare in `docs/tmp_logs.md` o nei log runtime:
-    - `Using persistent Camoufox profile`
-    - `Created Camoufox persona.` al primo avvio della generazione
-    - `persona=` con valori stabili tra relaunch della stessa `profile_generation`
-    - `Fetch URL result. ... channel=camoufox`
-    - `Live fetch service cycle state. ... service_state=stable`
-    - artifact presenti in `debug/` accanto alla dist se la GUI gira con `Modalita debugger`
-    - `profile_generation` che resta stabile in condizioni sane e cresce solo su rotate espliciti
-    - assenza o riduzione dei `hard_block` su `immobiliare` dopo la nuova policy profilo
-    - rapporto tra:
-      - numero di cicli completamente `healthy`
-      - numero di `hard_block` reali per sito
-    - comparsa eventuale di `long block` abbastanza lunghi da giustificare notifica dedicata
-    - riduzione o sparizione del pattern ripetuto:
-      - `Idealista detail verification flagged professional listing. ad_id=35256447`
-      - `Idealista detail verification flagged professional listing. ad_id=35231585`
-    - comparsa di `reused_professional>0` nelle righe `Idealista private-only DB cache reuse`
-    - assenza del vecchio pattern:
-      - `unsupported operand type(s) for +=: 'int' and 'NoneType'`
-      - `code=unexpected_error` su `idealista` a parita di condizioni
+### Cosa NON e cambiato
+- comportamento di rotazione profili
+- state machine e guard
+- pacing Gamma
+- bootstrap static resources
+- DataDome challenge detection
+- WebGL strings e hardwareConcurrency
+
+## Nota residua
+- `requirements.txt` porta avanti `undetected-playwright==0.3.0` dalla root sorgente; incluso nel primo rilascio `2.3_test`, ma senza un nuovo path operativo dichiarato nel codice prodotto
+
+## Prossime slice plausibili
+- soak osservativo della patch UA/TLS su sessione reale
+- `immobiliare adaptive prepare`
+- notifica blocco lungo `>= 1h` + recovery
+- `soft mode` locale post-`hard_block`

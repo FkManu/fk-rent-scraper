@@ -1,14 +1,12 @@
 # codex.md
 
 ## Contesto sintetico
-`2.2_test` e la root tecnica della linea `2.2 stable`.
+`2.3_test` e la nuova root tecnica aperta sopra la baseline `2.2 stable`.
 
-Il focus non e inseguire fix casuali, ma consolidare:
-- `camoufox` come backend operativo
-- continuita di sessione
-- runtime condiviso del servizio continuo
-- riduzione del rumore interazionale
-- precisione `private_only`
+Il focus immediato non e cambiare il prodotto, ma:
+- congelare bene la memoria della `2.2`
+- confermare la parita osservabile della nuova root
+- aprire poi la prima patch `2.3` in modo disciplinato
 
 ## Documento guida principale
 - `docs/risk_scoring_e_griglia_segnali_antibot.md`
@@ -19,4 +17,4 @@ Il focus non e inseguire fix casuali, ma consolidare:
 3. `docs/context/codex/OUTPUT_CURRENT.md`
 
 ## Regola pratica
-Qui valgono patch piccole, misurabili e confrontabili.
+Qui valgono patch piccole, misurabili, confrontabili e isolate.

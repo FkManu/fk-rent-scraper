@@ -1,20 +1,18 @@
-# Codex Workflow - 2.3_test
+# Codex Workflow - 2.2_test
 
-Workflow Codex ridotto all'essenziale per la linea `2.3_test`.
+Workflow Codex ridotto all'essenziale per la linea `2.2 stable`.
 
 ## Documenti vivi
-- `ACTIVE_PATCH.md` -> focus corrente della linea
+- `ACTIVE_PATCH.md` -> patch attiva corrente
 - `PROMPT_CURRENT.md` -> prompt operativo corrente
 - `OUTPUT_CURRENT.md` -> stato tecnico corrente
 - `REVIEW_CURRENT.md` -> review sintetica della patch corrente
-- `HISTORY.md` -> storico breve della linea e del cutover
+- `HISTORY.md` -> storico breve della linea
 
 ## Documenti reference
-- `REVIEW_2_1_STABLE.md` -> review storica baseline `2.1`
-- `REVIEW_2_2_STABLE.md` -> review di chiusura della linea `2.2`
+- `REVIEW_2_1_STABLE.md` -> review utile della baseline di provenienza
 
 ## Documenti archive
-- `archive/2_2/` -> snapshot dei file Codex vivi della `2.2`
 - `TASK_2_2_TEST_SILENT_SESSION_STRATEGY.md`
 - `TASK_2_2_M0_FOUNDATION.md`
 - `TASK_FIRST_RUN_RELIABILITY.md`
@@ -28,4 +26,4 @@ Workflow Codex ridotto all'essenziale per la linea `2.3_test`.
 5. `ACTIVE_PATCH.md`
 
 ## Regola pratica
-La prima responsabilita della linea e non perdere la baseline `2.2` mentre si apre il backlog `2.3`.
+I task della linea devono ridurre rumore, aumentare continuita o migliorare `private_only`.
