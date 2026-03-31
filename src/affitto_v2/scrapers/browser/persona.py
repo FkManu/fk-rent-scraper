@@ -38,6 +38,14 @@ CAMOUFOX_PERSONA_WINDOWS = (
 )
 
 
+def camoufox_canvas_noise_offsets(seed: int) -> tuple[int, int, int]:
+    return (
+        (seed % 7) + 1,
+        ((seed >> 4) % 7) + 1,
+        ((seed >> 8) % 7) + 1,
+    )
+
+
 def normalize_channel_label(value: str | None) -> str:
     return DEFAULT_BROWSER_LABEL
 
@@ -103,10 +111,12 @@ def camoufox_persona_from_payload(payload: dict[str, object]) -> CamoufoxPersona
         launch_options = payload.get("launch_options")
         if not isinstance(launch_options, dict):
             return None
+        seed = int(payload.get("seed") or 0)
+        canvas_r_offset, canvas_g_offset, canvas_b_offset = camoufox_canvas_noise_offsets(seed)
         persona = CamoufoxPersona(
             version=int(payload.get("version") or 0),
             persona_id=str(payload.get("persona_id") or "").strip(),
-            seed=int(payload.get("seed") or 0),
+            seed=seed,
             site=str(payload.get("site") or "").strip(),
             channel_label=str(payload.get("channel_label") or "").strip(),
             profile_generation=int(payload.get("profile_generation") or 0),
@@ -120,6 +130,9 @@ def camoufox_persona_from_payload(payload: dict[str, object]) -> CamoufoxPersona
             history_length=int(payload.get("history_length") or 0),
             font_spacing_seed=int(payload.get("font_spacing_seed") or 0),
             canvas_aa_offset=int(payload.get("canvas_aa_offset") or 0),
+            canvas_r_offset=int(payload.get("canvas_r_offset") or canvas_r_offset),
+            canvas_g_offset=int(payload.get("canvas_g_offset") or canvas_g_offset),
+            canvas_b_offset=int(payload.get("canvas_b_offset") or canvas_b_offset),
             launch_options=launch_options,
         )
     except (TypeError, ValueError):
@@ -137,6 +150,9 @@ def camoufox_persona_from_payload(payload: dict[str, object]) -> CamoufoxPersona
         or persona.window_height <= 0
         or persona.humanize_max_sec <= 0
         or persona.history_length <= 0
+        or persona.canvas_r_offset <= 0
+        or persona.canvas_g_offset <= 0
+        or persona.canvas_b_offset <= 0
         or not persona.launch_options
     ):
         return None
@@ -165,6 +181,7 @@ def build_camoufox_persona(
     history_length = rng.randint(2, 5)
     font_spacing_seed = rng.randint(0, 1_073_741_823)
     canvas_aa_offset = rng.randint(-18, 18)
+    canvas_r_offset, canvas_g_offset, canvas_b_offset = camoufox_canvas_noise_offsets(seed)
     config = {
         "timezone": CAMOUFOX_DEFAULT_TIMEZONE,
         "window.history.length": history_length,
@@ -200,6 +217,9 @@ def build_camoufox_persona(
         history_length=history_length,
         font_spacing_seed=font_spacing_seed,
         canvas_aa_offset=canvas_aa_offset,
+        canvas_r_offset=canvas_r_offset,
+        canvas_g_offset=canvas_g_offset,
+        canvas_b_offset=canvas_b_offset,
         launch_options=launch_options,
     )
 
@@ -376,6 +396,7 @@ __all__ = [
     "DEFAULT_BROWSER_LABEL",
     "build_camoufox_persona",
     "camoufox_launch_kwargs",
+    "camoufox_canvas_noise_offsets",
     "camoufox_persona_from_payload",
     "camoufox_persona_path",
     "camoufox_persona_seed",

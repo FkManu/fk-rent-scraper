@@ -4,8 +4,10 @@ import asyncio
 import argparse
 import json
 import os
+import random
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -88,6 +90,11 @@ _PREEMPTIVE_SITE_SLOT_RECYCLE_LIMITS: dict[str, dict[str, int]] = {
         "max_reuse_count": 12,
     }
 }
+_LIVE_SERVICE_CYCLE_JITTER_SIGMA_SEC = 25.0
+_LIVE_SERVICE_CYCLE_JITTER_CLAMP_SEC = 30.0
+_LIVE_SERVICE_NIGHT_START_HOUR = 1
+_LIVE_SERVICE_NIGHT_END_HOUR = 7
+_LIVE_SERVICE_NIGHT_MULTIPLIER = 6.5
 
 
 def _maybe_preemptive_site_slot_recycle(
@@ -127,6 +134,40 @@ def _maybe_preemptive_site_slot_recycle(
             reason="+".join(reason_parts) or "preventive_recycle",
         )
     return RuntimeDispositionDecision()
+
+
+def _is_live_service_night_mode(now_local: datetime) -> bool:
+    return _LIVE_SERVICE_NIGHT_START_HOUR <= now_local.hour < _LIVE_SERVICE_NIGHT_END_HOUR
+
+
+def _live_service_local_now() -> datetime:
+    return datetime.now().astimezone()
+
+
+def _compute_jittered_cycle_sec(
+    base_cadence_sec: int,
+    *,
+    gauss_fn=random.gauss,
+) -> float:
+    base = max(1.0, float(base_cadence_sec))
+    raw = base + float(gauss_fn(0.0, _LIVE_SERVICE_CYCLE_JITTER_SIGMA_SEC))
+    return max(base - _LIVE_SERVICE_CYCLE_JITTER_CLAMP_SEC, min(base + _LIVE_SERVICE_CYCLE_JITTER_CLAMP_SEC, raw))
+
+
+def _compute_effective_cycle_sleep_sec(
+    base_cadence_sec: int,
+    *,
+    now_local: datetime | None = None,
+    gauss_fn=random.gauss,
+) -> tuple[float, bool]:
+    current_local = now_local or _live_service_local_now()
+    if _is_live_service_night_mode(current_local):
+        effective_base = max(1.0, float(base_cadence_sec)) * _LIVE_SERVICE_NIGHT_MULTIPLIER
+        raw = effective_base + float(
+            gauss_fn(0.0, _LIVE_SERVICE_CYCLE_JITTER_SIGMA_SEC * _LIVE_SERVICE_NIGHT_MULTIPLIER)
+        )
+        return (max(effective_base * 0.8, min(effective_base * 1.2, raw)), True)
+    return (_compute_jittered_cycle_sec(base_cadence_sec, gauss_fn=gauss_fn), False)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -335,8 +376,8 @@ def _flatten_error_text(exc: Exception) -> str:
 
 def _validate_runtime_config(config_path: Path) -> None:
     config = load_config(config_path)
-    if config.runtime.cycle_minutes < 5:
-        raise ConfigError("cycle_minutes cannot be lower than 5.")
+    if config.runtime.cycle_minutes < 3:
+        raise ConfigError("cycle_minutes cannot be lower than 3.")
 
 
 def _clone_args_without_save_overrides(args: argparse.Namespace) -> argparse.Namespace:
@@ -873,8 +914,8 @@ def _log_pipeline_summary(result, send_real_notifications: bool, logger, prefix:
 
 def _build_live_service_policy(config: AppConfig, args: argparse.Namespace) -> LiveServicePolicy:
     cadence_minutes = int(config.runtime.cycle_minutes)
-    if cadence_minutes < 5:
-        raise ConfigError("cycle_minutes cannot be lower than 5.")
+    if cadence_minutes < 3:
+        raise ConfigError("cycle_minutes cannot be lower than 3.")
 
     max_cycle_minutes = int(args.cycle_max_minutes or 0) or 10
     if max_cycle_minutes < cadence_minutes:
@@ -892,7 +933,7 @@ def _build_live_service_policy(config: AppConfig, args: argparse.Namespace) -> L
     )
 
 
-def _count_missed_cycle_slots(*, cycle_started_monotonic: float, cycle_finished_monotonic: float, cadence_sec: int) -> int:
+def _count_missed_cycle_slots(*, cycle_started_monotonic: float, cycle_finished_monotonic: float, cadence_sec: float) -> int:
     next_slot_monotonic = cycle_started_monotonic + cadence_sec
     if cycle_finished_monotonic <= next_slot_monotonic:
         return 0
@@ -1214,6 +1255,8 @@ def _run_fetch_live_service(
     missed_cycle_count = 0
     service_state = LiveServiceState()
     next_cycle_monotonic = monotonic_fn()
+    planned_cycle_sec = float(policy.cadence_sec)
+    planned_night_mode = False
 
     logger.info(
         "Starting live fetch service. cadence_sec=%s max_cycle_sec=%s max_cycles=%s auto_restart_on_failure=%s",
@@ -1254,10 +1297,12 @@ def _run_fetch_live_service(
             sleep_sec = max(0.0, next_cycle_monotonic - now_monotonic)
             if sleep_sec > 0:
                 logger.info(
-                    "Waiting for next live cycle. cycle=%s sleep_sec=%.3f cadence_sec=%s",
+                    "Waiting for next live cycle. cycle=%s sleep_sec=%.3f cadence_sec=%s actual_cycle_sec=%.3f night_mode=%s",
                     cycle_number + 1,
                     sleep_sec,
                     policy.cadence_sec,
+                    planned_cycle_sec,
+                    planned_night_mode,
                 )
                 stop_requested = _sleep_until_next_cycle_or_stop(
                     sleep_sec=sleep_sec,
@@ -1280,10 +1325,12 @@ def _run_fetch_live_service(
             cycle_number += 1
             cycle_delay_sec = max(0.0, cycle_started_monotonic - next_cycle_monotonic)
             logger.info(
-                "Live fetch service cycle started. cycle=%s cycle_delay_sec=%.3f cadence_sec=%s pooled_sessions=%s",
+                "Live fetch service cycle started. cycle=%s cycle_delay_sec=%.3f cadence_sec=%s actual_cycle_sec=%.3f night_mode=%s pooled_sessions=%s",
                 cycle_number,
                 cycle_delay_sec,
                 policy.cadence_sec,
+                planned_cycle_sec,
+                planned_night_mode,
                 len(service_runtime.session_slots),
             )
 
@@ -1327,7 +1374,7 @@ def _run_fetch_live_service(
             missed_slots = _count_missed_cycle_slots(
                 cycle_started_monotonic=cycle_started_monotonic,
                 cycle_finished_monotonic=cycle_finished_monotonic,
-                cadence_sec=policy.cadence_sec,
+                cadence_sec=planned_cycle_sec,
             )
             if missed_slots:
                 missed_cycle_count += missed_slots
@@ -1439,7 +1486,15 @@ def _run_fetch_live_service(
                     service_state.current_state,
                 )
                 return
-            next_cycle_monotonic += policy.cadence_sec
+            planned_cycle_sec, planned_night_mode = _compute_effective_cycle_sleep_sec(policy.cadence_sec)
+            logger.info(
+                "Planned next live cycle. cycle=%s base_cadence_sec=%s actual_cycle_sec=%.3f night_mode=%s",
+                cycle_number + 1,
+                policy.cadence_sec,
+                planned_cycle_sec,
+                planned_night_mode,
+            )
+            next_cycle_monotonic += planned_cycle_sec
     finally:
         try:
             service_loop.run_until_complete(close_live_fetch_service_runtime(service_runtime))

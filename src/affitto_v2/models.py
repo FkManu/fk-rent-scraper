@@ -273,7 +273,7 @@ class EmailConfig(BaseModel):
 
 
 class RuntimeConfig(BaseModel):
-    cycle_minutes: int = Field(default=5, ge=5, le=180)
+    cycle_minutes: int = Field(default=5, ge=3, le=180)
     max_listings_per_page: int = Field(default=30, ge=5, le=100)
     captcha_mode: CaptchaMode = "skip_and_notify"
     auto_restart_on_failure: bool = True

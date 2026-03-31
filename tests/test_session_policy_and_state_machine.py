@@ -12,7 +12,7 @@ class SessionPolicyTests(unittest.TestCase):
         policy = get_session_policy("idealista")
 
         self.assertEqual(policy.site, "idealista")
-        self.assertIn("Chrome/134.0.0.0", policy.user_agent)
+        self.assertIn("Firefox/135.0", policy.user_agent)
         self.assertEqual(policy.hardware.device_memory, 16)
         self.assertEqual(policy.hardware.hardware_concurrency, 8)
         self.assertEqual(policy.hardware.webgl_vendor, "Intel Inc.")

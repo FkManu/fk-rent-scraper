@@ -11,6 +11,9 @@ class HardwareMimetics:
     webgl_vendor: str
     webgl_renderer: str
     canvas_noise_mode: str = "static"
+    canvas_r_offset: int = 1
+    canvas_g_offset: int = 2
+    canvas_b_offset: int = 3
 
 
 @dataclass(frozen=True, slots=True)

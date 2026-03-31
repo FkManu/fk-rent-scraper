@@ -112,9 +112,9 @@ def build_render_context_init_script(hardware: HardwareMimetics) -> str:
       for (let y = 0; y < height; y += yStride) {
         for (let x = 0; x < width; x += xStride) {
           const index = ((y * width) + x) * 4;
-          data[index] = (data[index] + 1) & 0xFF;
-          data[index + 1] = (data[index + 1] + 2) & 0xFF;
-          data[index + 2] = (data[index + 2] + 3) & 0xFF;
+          data[index] = (data[index] + __CANVAS_R_OFFSET__) & 0xFF;
+          data[index + 1] = (data[index + 1] + __CANVAS_G_OFFSET__) & 0xFF;
+          data[index + 2] = (data[index + 2] + __CANVAS_B_OFFSET__) & 0xFF;
         }
       }
 
@@ -144,6 +144,9 @@ def build_render_context_init_script(hardware: HardwareMimetics) -> str:
         .replace("__USER_AGENT__", repr(hardware.user_agent))
         .replace("__WEBGL_VENDOR__", repr(hardware.webgl_vendor))
         .replace("__WEBGL_RENDERER__", repr(hardware.webgl_renderer))
+        .replace("__CANVAS_R_OFFSET__", str(hardware.canvas_r_offset))
+        .replace("__CANVAS_G_OFFSET__", str(hardware.canvas_g_offset))
+        .replace("__CANVAS_B_OFFSET__", str(hardware.canvas_b_offset))
     )
 
 
@@ -187,7 +190,7 @@ async def install_render_context_init_script(
             selected_hardware.hardware_concurrency,
             selected_hardware.webgl_vendor,
             selected_hardware.webgl_renderer,
-            selected_hardware.canvas_noise_mode,
+            f"{selected_hardware.canvas_noise_mode}:{selected_hardware.canvas_r_offset}/{selected_hardware.canvas_g_offset}/{selected_hardware.canvas_b_offset}",
         )
 
 

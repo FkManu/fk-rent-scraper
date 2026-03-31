@@ -35,7 +35,8 @@ _SMTP_SECURITY_LABELS = {
     "none": "Nessuna sicurezza",
 }
 _SMTP_SECURITY_ORDER = ("starttls", "ssl_tls", "none")
-_GUI_STATE_VERSION = 2
+_GUI_STATE_VERSION = 3
+_WINDOWS_GUI_AUTOSTART_ENV = "AFFITTO_V2_GUI_AUTOSTART"
 _LOG_LEVEL_RE = re.compile(r"\|\s*(DEBUG|INFO|WARNING|ERROR)\s*\|")
 _SUPPORTED_URL_RE = re.compile(
     r"((?:https?://)?(?:www\.)?(?:idealista\.it|immobiliare\.it)[^\s\"'<>]+)",
@@ -163,13 +164,59 @@ def _windows_startup_script_path() -> Path | None:
     if not appdata:
         return None
     startup_dir = Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
-    return startup_dir / "AffittoV2_GUI.cmd"
+    return startup_dir / "AffittoV2_GUI.vbs"
+
+
+def _windows_startup_legacy_script_paths() -> list[Path]:
+    script = _windows_startup_script_path()
+    if script is None:
+        return []
+    return [
+        script.with_suffix(".cmd"),
+        script.with_suffix(".bat"),
+    ]
 
 
 def _pythonw_or_python() -> Path:
     exe = Path(sys.executable).resolve()
     pyw = exe.with_name("pythonw.exe")
     return pyw if pyw.exists() else exe
+
+
+def _vbscript_literal(value: str) -> str:
+    return '"' + str(value).replace('"', '""') + '"'
+
+
+def _autostart_launch_command(*, bundle_mode: bool, run_py: Path, app_root: Path) -> str:
+    if bundle_mode:
+        launcher = Path(sys.executable).resolve()
+        return _vbscript_literal(str(launcher))
+    py = _pythonw_or_python()
+    return " ".join(
+        [
+            _vbscript_literal(str(py)),
+            _vbscript_literal(str(run_py)),
+            "gui",
+        ]
+    )
+
+
+def _build_windows_startup_vbs(*, launch_command: str, app_root: Path) -> str:
+    return "\r\n".join(
+        [
+            'Set shell = CreateObject("WScript.Shell")',
+            'Set env = shell.Environment("PROCESS")',
+            f'env({_vbscript_literal(_WINDOWS_GUI_AUTOSTART_ENV)}) = "1"',
+            f"shell.CurrentDirectory = {_vbscript_literal(str(app_root))}",
+            f"shell.Run {_vbscript_literal(launch_command)}, 0, False",
+            "",
+        ]
+    )
+
+
+def _is_windows_gui_autostart_launch() -> bool:
+    value = _trim_text(os.getenv(_WINDOWS_GUI_AUTOSTART_ENV, "")).lower()
+    return value in {"1", "true", "yes", "y", "on"}
 
 
 def _load_gui_state(path: Path) -> dict:
@@ -179,6 +226,7 @@ def _load_gui_state(path: Path) -> dict:
         "blocked_agency_names": [],
         "log_filter": "INFO",
         "autostart_enabled": False,
+        "autostart_service_enabled": False,
         "debugger_enabled": True,
     }
     try:
@@ -203,6 +251,7 @@ def _load_gui_state(path: Path) -> dict:
             "blocked_agency_names": names,
             "log_filter": log_filter,
             "autostart_enabled": bool(raw.get("autostart_enabled", False)),
+            "autostart_service_enabled": bool(raw.get("autostart_service_enabled", False)),
             "debugger_enabled": bool(raw.get("debugger_enabled", True)),
         }
     except Exception:
@@ -289,6 +338,7 @@ class AffittoGuiApp:
         self.cli_exe = _cli_executable_path()
         self.run_py = _run_py_path()
         self.gui_state = _load_gui_state(self.gui_state_path)
+        self.launched_from_windows_autostart = _is_windows_gui_autostart_launch()
         self._log_records: deque[tuple[str, str]] = deque(maxlen=4000)
         self._queue: Queue[tuple[str, object]] = Queue()
         self._worker: threading.Thread | None = None
@@ -345,6 +395,10 @@ class AffittoGuiApp:
         self.log_filter_var = tk.StringVar(value=self.gui_state.get("log_filter", "INFO"))
         self.status_var = tk.StringVar(value="Pronto.")
         self.autostart_var = tk.BooleanVar(value=self._is_autostart_enabled())
+        self.autostart_service_var = tk.BooleanVar(
+            value=bool(self.autostart_var.get()) and bool(self.gui_state.get("autostart_service_enabled", False))
+        )
+        self.autostart_service_note_var = tk.StringVar(value="")
         self.debugger_mode_var = tk.BooleanVar(value=bool(self.gui_state.get("debugger_enabled", True)))
         self.debugger_note_var = tk.StringVar(
             value=f"Debugger mode: salva artifact in {self.live_debug_dir_path}"
@@ -353,12 +407,15 @@ class AffittoGuiApp:
 
         self._build_ui()
         self.private_only_ads_var.trace_add("write", self._on_private_only_changed)
+        self.autostart_var.trace_add("write", self._on_autostart_changed)
         self._bind_email_form_traces()
         self._refresh_private_only_controls()
+        self._refresh_autostart_controls()
         self._load_blocked_names()
         self._load_email_form()
         self._refresh_email_status()
         self.root.after(120, self._drain_queue)
+        self.root.after(350, self._maybe_autostart_service_on_windows_launch)
 
     def _infer_notify_mode(self) -> str:
         saved = str(self.gui_state.get("notify_mode", "")).strip().lower()
@@ -624,8 +681,8 @@ class AffittoGuiApp:
     def _build_runtime_frame(self, parent: ttk.Frame) -> ttk.LabelFrame:
         frame = ttk.LabelFrame(parent, text="Runtime")
         frame.columnconfigure(1, weight=1)
-        ttk.Label(frame, text="Ciclo (minuti, min 5)").grid(row=0, column=0, sticky="w", padx=8, pady=6)
-        ttk.Spinbox(frame, from_=5, to=180, textvariable=self.cycle_minutes_var, width=10).grid(
+        ttk.Label(frame, text="Ciclo (minuti, min 3)").grid(row=0, column=0, sticky="w", padx=8, pady=6)
+        ttk.Spinbox(frame, from_=3, to=180, textvariable=self.cycle_minutes_var, width=10).grid(
             row=0, column=1, sticky="w", padx=8, pady=6
         )
         ttk.Label(
@@ -735,8 +792,21 @@ class AffittoGuiApp:
         ttk.Checkbutton(frame, text="Avvio automatico GUI (Windows)", variable=self.autostart_var).grid(
             row=11, column=0, sticky="w", padx=8, pady=(4, 2)
         )
+        self.autostart_service_check = ttk.Checkbutton(
+            frame,
+            text="Avvia anche il servizio continuo al boot",
+            variable=self.autostart_service_var,
+        )
+        self.autostart_service_check.grid(row=12, column=0, sticky="w", padx=24, pady=(0, 2))
+        ttk.Label(
+            frame,
+            textvariable=self.autostart_service_note_var,
+            foreground="#2f4f4f",
+            wraplength=420,
+            justify=tk.LEFT,
+        ).grid(row=13, column=0, sticky="w", padx=8, pady=(0, 4))
         ttk.Button(frame, text="Applica Avvio Automatico", command=self._apply_autostart).grid(
-            row=12, column=0, sticky="ew", padx=8, pady=(2, 8)
+            row=14, column=0, sticky="ew", padx=8, pady=(2, 8)
         )
         return frame
 
@@ -783,7 +853,7 @@ class AffittoGuiApp:
             "- La GUI salva `cycle_minutes` in configurazione e il servizio usa quel valore come cadenza target.\n"
             "- Il pulsante Stop chiede ora una chiusura pulita del servizio: attende la fine del ciclo invece di troncare subito il runtime.\n"
             "- Con `Modalita debugger` attiva, sia Run Once sia servizio continuo salvano artifact debug per analizzare i blocchi.\n"
-            "- Usa intervalli realistici: minimo 5 minuti, meglio 10-15 se stai ancora tarando il setup.\n\n"
+            "- Usa intervalli realistici: minimo 3 minuti, meglio 10-15 se stai ancora tarando il setup.\n\n"
             "Privacy / reset runtime\n"
             "- `Reset Profili/Debug Runtime` elimina profili browser persistenti e artifact debug salvati.\n"
             "- Usalo quando vuoi ripulire lo stato locale della VM senza toccare il DB annunci.\n\n"
@@ -1104,6 +1174,29 @@ class AffittoGuiApp:
     def _on_private_only_changed(self, *_args) -> None:
         self._refresh_private_only_controls()
 
+    def _on_autostart_changed(self, *_args) -> None:
+        if not self.autostart_var.get() and self.autostart_service_var.get():
+            self.autostart_service_var.set(False)
+        self._refresh_autostart_controls()
+
+    def _refresh_autostart_controls(self) -> None:
+        enabled = bool(self.autostart_var.get())
+        service_check = getattr(self, "autostart_service_check", None)
+        if service_check is not None:
+            self._set_widget_enabled(service_check, enabled)
+        note_var = getattr(self, "autostart_service_note_var", None)
+        if note_var is None:
+            return
+        if enabled:
+            note_var.set(
+                "Se attivo, il servizio parte solo quando la GUI viene aperta dal boot Windows tramite autostart."
+            )
+            return
+        note_var.set("Richiede 'Avvio automatico GUI (Windows)' attivo.")
+
+    def _is_autostart_service_enabled(self) -> bool:
+        return bool(self.autostart_var.get()) and bool(self.autostart_service_var.get())
+
     def _refresh_private_only_controls(self) -> None:
         private_only = bool(self.private_only_ads_var.get())
         if private_only:
@@ -1311,7 +1404,13 @@ class AffittoGuiApp:
                 urls.append(v)
         return urls
 
-    def _save_configuration(self, show_message: bool = True, *, email_action: bool = False) -> bool:
+    def _save_configuration(
+        self,
+        show_message: bool = True,
+        *,
+        email_action: bool = False,
+        suppress_dialogs: bool = False,
+    ) -> bool:
         try:
             if self._is_email_test_running():
                 raise ConfigError("Attendi la fine del test email in corso prima di salvare o avviare un run.")
@@ -1393,6 +1492,7 @@ class AffittoGuiApp:
                 "blocked_agency_names": list(self._blocked_names),
                 "log_filter": self.log_filter_var.get().strip().upper(),
                 "autostart_enabled": bool(self.autostart_var.get()),
+                "autostart_service_enabled": self._is_autostart_service_enabled(),
                 "debugger_enabled": bool(self.debugger_mode_var.get()),
             }
             _save_gui_state(self.gui_state_path, self.gui_state)
@@ -1402,11 +1502,14 @@ class AffittoGuiApp:
             return True
         except (ConfigError, ValueError) as exc:
             title = exc.title if isinstance(exc, GuiUserFacingError) else "Configurazione non valida"
-            messagebox.showerror(title, str(exc))
+            if not suppress_dialogs:
+                messagebox.showerror(title, str(exc))
             if isinstance(exc, GuiUserFacingError):
                 self.status_var.set("Salvataggio bloccato: email incompleta.")
             else:
                 self.status_var.set("Errore configurazione.")
+            if suppress_dialogs:
+                self._enqueue("log", f"[WARNING] Configurazione non valida durante avvio automatico: {exc}")
             return False
 
     def _clear_logs(self) -> None:
@@ -1659,18 +1762,41 @@ class AffittoGuiApp:
             self._enqueue("status", f"Servizio continuo terminato con errore (code={code}).")
         self._enqueue("done", "periodic")
 
-    def _start_periodic(self) -> None:
+    def _start_periodic(self, *, autostart_triggered: bool = False, suppress_dialogs: bool = False) -> bool:
         if self._worker is not None and self._worker.is_alive():
-            messagebox.showwarning("Affitto v2", "Un run e gia in corso.")
-            return
-        if not self._save_configuration(show_message=False):
-            return
+            if not suppress_dialogs:
+                messagebox.showwarning("Affitto v2", "Un run e gia in corso.")
+            else:
+                self.status_var.set("Avvio automatico servizio saltato: run gia in corso.")
+                self._enqueue("log", "[WARNING] Avvio automatico servizio saltato: run gia in corso.")
+            return False
+        if not self._save_configuration(show_message=False, suppress_dialogs=suppress_dialogs):
+            return False
         self._periodic_mode = True
         self._stop_event.clear()
         self.start_btn.configure(state=tk.DISABLED)
         self.stop_btn.configure(state=tk.NORMAL)
         self._worker = threading.Thread(target=self._periodic_worker, daemon=True)
         self._worker.start()
+        if autostart_triggered:
+            self._enqueue("log", "[INFO] Servizio continuo avviato automaticamente da autostart Windows.")
+        return True
+
+    def _maybe_autostart_service_on_windows_launch(self) -> None:
+        if not self.launched_from_windows_autostart:
+            return
+        if not self._is_autostart_service_enabled():
+            return
+        try:
+            if self.service_stop_flag_path.exists():
+                self.service_stop_flag_path.unlink()
+                self._enqueue("log", f"[INFO] Rimossa stop-flag stale per autostart: {self.service_stop_flag_path}")
+        except Exception as exc:
+            self.status_var.set("Avvio automatico servizio bloccato: stop-flag non rimovibile.")
+            self._enqueue("log", f"[WARNING] Autostart servizio bloccato: impossibile rimuovere stop-flag: {exc}")
+            return
+        self.status_var.set("Avvio automatico Windows rilevato: preparo il servizio continuo.")
+        self._start_periodic(autostart_triggered=True, suppress_dialogs=True)
 
     def _stop_running(self) -> None:
         self._stop_event.set()
@@ -1825,7 +1951,11 @@ class AffittoGuiApp:
 
     def _is_autostart_enabled(self) -> bool:
         script = _windows_startup_script_path()
-        return bool(script and script.exists())
+        if not script:
+            return False
+        if script.exists():
+            return True
+        return any(path.exists() for path in _windows_startup_legacy_script_paths())
 
     def _apply_autostart(self) -> None:
         script = _windows_startup_script_path()
@@ -1833,26 +1963,35 @@ class AffittoGuiApp:
             messagebox.showwarning("Avvio automatico", "APPDATA non disponibile su questo sistema.")
             return
         try:
+            if not self.autostart_var.get() and self.autostart_service_var.get():
+                self.autostart_service_var.set(False)
             if self.autostart_var.get():
                 script.parent.mkdir(parents=True, exist_ok=True)
-                if self.bundle_mode:
-                    launcher = Path(sys.executable).resolve()
-                    content = "@echo off\r\n" f'cd /d "{self.app_root}"\r\n' f'"{launcher}"\r\n'
-                else:
-                    py = _pythonw_or_python()
-                    content = (
-                        "@echo off\r\n"
-                        f'cd /d "{self.app_root}"\r\n'
-                        f'"{py}" "{self.run_py}" gui\r\n'
-                    )
+                launch_command = _autostart_launch_command(
+                    bundle_mode=self.bundle_mode,
+                    run_py=self.run_py,
+                    app_root=self.app_root,
+                )
+                content = _build_windows_startup_vbs(
+                    launch_command=launch_command,
+                    app_root=self.app_root,
+                )
                 script.write_text(content, encoding="utf-8")
+                for legacy_script in _windows_startup_legacy_script_paths():
+                    if legacy_script.exists():
+                        legacy_script.unlink()
                 self.status_var.set("Avvio automatico abilitato.")
             else:
                 if script.exists():
                     script.unlink()
+                for legacy_script in _windows_startup_legacy_script_paths():
+                    if legacy_script.exists():
+                        legacy_script.unlink()
                 self.status_var.set("Avvio automatico disabilitato.")
             self.gui_state["autostart_enabled"] = bool(self.autostart_var.get())
+            self.gui_state["autostart_service_enabled"] = self._is_autostart_service_enabled()
             _save_gui_state(self.gui_state_path, self.gui_state)
+            self._refresh_autostart_controls()
         except Exception as exc:
             messagebox.showerror("Avvio automatico", str(exc))
 

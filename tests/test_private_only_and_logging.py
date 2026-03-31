@@ -45,6 +45,9 @@ class _Var:
     def get(self):
         return self._value
 
+    def set(self, value):
+        self._value = value
+
 
 class PrivateOnlyModeTests(unittest.TestCase):
     def test_private_only_forces_agency_extraction(self) -> None:
@@ -739,6 +742,9 @@ class LiveFetchReviewTests(unittest.IsolatedAsyncioTestCase):
             history_length=4,
             font_spacing_seed=123456,
             canvas_aa_offset=7,
+            canvas_r_offset=3,
+            canvas_g_offset=4,
+            canvas_b_offset=5,
             launch_options={
                 "executable_path": "C:/camoufox/old.exe",
                 "args": ["--persona"],
@@ -1213,6 +1219,36 @@ class LiveServiceSchedulingTests(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "cycle_max_minutes cannot be lower than cycle_minutes"):
             app_main._build_live_service_policy(config, self._build_service_args(cycle_max_minutes=5))
 
+    def test_compute_jittered_cycle_sec_clamps_daytime_delta(self) -> None:
+        self.assertEqual(
+            app_main._compute_jittered_cycle_sec(180, gauss_fn=lambda _mu, _sigma: 80.0),
+            210.0,
+        )
+        self.assertEqual(
+            app_main._compute_jittered_cycle_sec(180, gauss_fn=lambda _mu, _sigma: -80.0),
+            150.0,
+        )
+
+    def test_compute_effective_cycle_sleep_sec_marks_night_mode(self) -> None:
+        sleep_sec, night_mode = app_main._compute_effective_cycle_sleep_sec(
+            180,
+            now_local=datetime(2026, 3, 31, 3, 0, tzinfo=timezone.utc),
+            gauss_fn=lambda _mu, _sigma: 0.0,
+        )
+
+        self.assertTrue(night_mode)
+        self.assertEqual(sleep_sec, 1170.0)
+
+    def test_compute_effective_cycle_sleep_sec_uses_day_jitter_outside_night_window(self) -> None:
+        sleep_sec, night_mode = app_main._compute_effective_cycle_sleep_sec(
+            180,
+            now_local=datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc),
+            gauss_fn=lambda _mu, _sigma: 10.0,
+        )
+
+        self.assertFalse(night_mode)
+        self.assertEqual(sleep_sec, 190.0)
+
     def test_count_missed_cycle_slots_returns_zero_when_cycle_finishes_inside_window(self) -> None:
         missed = app_main._count_missed_cycle_slots(
             cycle_started_monotonic=100.0,
@@ -1501,14 +1537,15 @@ class LiveServiceSchedulingTests(unittest.TestCase):
             with mock.patch.object(app_main, "load_or_create_config", return_value=_build_config(private_only_ads=False)):
                 with mock.patch.object(app_main, "_apply_config_overrides", side_effect=lambda config, raw_args: (config, [])):
                     with mock.patch.object(app_main, "_run_fetch_live_once", side_effect=lambda *a, **k: cycle_calls.append(1)):
-                        app_main._run_fetch_live_service(
-                            config_path,
-                            profiles_path,
-                            args,
-                            logger,
-                            monotonic_fn=fake_monotonic,
-                            sleep_fn=fake_sleep,
-                        )
+                        with mock.patch.object(app_main, "_compute_effective_cycle_sleep_sec", return_value=(300.0, False)):
+                            app_main._run_fetch_live_service(
+                                config_path,
+                                profiles_path,
+                                args,
+                                logger,
+                                monotonic_fn=fake_monotonic,
+                                sleep_fn=fake_sleep,
+                            )
 
         self.assertEqual(len(cycle_calls), 2)
         self.assertEqual(sleep_calls, [])
@@ -1528,14 +1565,15 @@ class LiveServiceSchedulingTests(unittest.TestCase):
                 with mock.patch.object(app_main, "_apply_config_overrides", side_effect=lambda config, raw_args: (config, [])):
                     with mock.patch.object(app_main, "_clear_service_stop_flag", side_effect=lambda path: None):
                         with mock.patch.object(app_main, "_run_fetch_live_once") as run_once_mock:
-                            app_main._run_fetch_live_service(
-                                config_path,
-                                profiles_path,
-                                argparse.Namespace(**run_args),
-                                logger,
-                                monotonic_fn=lambda: 0.0,
-                                sleep_fn=lambda _: None,
-                            )
+                            with mock.patch.object(app_main, "_compute_effective_cycle_sleep_sec", return_value=(300.0, False)):
+                                app_main._run_fetch_live_service(
+                                    config_path,
+                                    profiles_path,
+                                    argparse.Namespace(**run_args),
+                                    logger,
+                                    monotonic_fn=lambda: 0.0,
+                                    sleep_fn=lambda _: None,
+                                )
 
         run_once_mock.assert_not_called()
 
@@ -1563,14 +1601,15 @@ class LiveServiceSchedulingTests(unittest.TestCase):
             with mock.patch.object(app_main, "load_or_create_config", return_value=_build_config(private_only_ads=False)):
                 with mock.patch.object(app_main, "_apply_config_overrides", side_effect=lambda config, raw_args: (config, [])):
                     with mock.patch.object(app_main, "_run_fetch_live_once", return_value=None) as run_once_mock:
-                        app_main._run_fetch_live_service(
-                            config_path,
-                            profiles_path,
-                            argparse.Namespace(**run_args),
-                            logger,
-                            monotonic_fn=fake_monotonic,
-                            sleep_fn=fake_sleep,
-                        )
+                        with mock.patch.object(app_main, "_compute_effective_cycle_sleep_sec", return_value=(300.0, False)):
+                            app_main._run_fetch_live_service(
+                                config_path,
+                                profiles_path,
+                                argparse.Namespace(**run_args),
+                                logger,
+                                monotonic_fn=fake_monotonic,
+                                sleep_fn=fake_sleep,
+                            )
 
         run_once_mock.assert_called_once()
         self.assertEqual(sleep_calls, [1.0])
@@ -1596,14 +1635,15 @@ class LiveServiceSchedulingTests(unittest.TestCase):
                 with mock.patch.object(app_main, "_apply_config_overrides", side_effect=lambda config, raw_args: (config, [])):
                     with mock.patch.object(app_main, "_run_fetch_live_once", side_effect=capture_runtime):
                         with mock.patch.object(app_main, "close_live_fetch_service_runtime", new=mock.AsyncMock()) as close_mock:
-                            app_main._run_fetch_live_service(
-                                config_path,
-                                profiles_path,
-                                args,
-                                logger,
-                                monotonic_fn=fake_monotonic,
-                                sleep_fn=lambda _: None,
-                            )
+                            with mock.patch.object(app_main, "_compute_effective_cycle_sleep_sec", return_value=(300.0, False)):
+                                app_main._run_fetch_live_service(
+                                    config_path,
+                                    profiles_path,
+                                    args,
+                                    logger,
+                                    monotonic_fn=fake_monotonic,
+                                    sleep_fn=lambda _: None,
+                                )
 
         self.assertEqual(len(runtime_ids), 2)
         self.assertEqual(runtime_ids[0], runtime_ids[1])
@@ -1624,14 +1664,15 @@ class LiveServiceSchedulingTests(unittest.TestCase):
                 with mock.patch.object(app_main, "_apply_config_overrides", side_effect=lambda config, raw_args: (config, [])):
                     with mock.patch.object(app_main, "_run_fetch_live_once", return_value=None):
                         with mock.patch.object(logger, "warning") as warning_mock:
-                            app_main._run_fetch_live_service(
-                                config_path,
-                                profiles_path,
-                                args,
-                                logger,
-                                monotonic_fn=fake_monotonic,
-                                sleep_fn=lambda _: None,
-                            )
+                            with mock.patch.object(app_main, "_compute_effective_cycle_sleep_sec", return_value=(300.0, False)):
+                                app_main._run_fetch_live_service(
+                                    config_path,
+                                    profiles_path,
+                                    args,
+                                    logger,
+                                    monotonic_fn=fake_monotonic,
+                                    sleep_fn=lambda _: None,
+                                )
 
         warning_messages = " ".join(str(call.args[0]) for call in warning_mock.call_args_list)
         self.assertIn("exceeded hard threshold", warning_messages)
@@ -1663,14 +1704,15 @@ class LiveServiceSchedulingTests(unittest.TestCase):
                     with mock.patch.object(app_main, "_run_fetch_live_once", return_value=run_report):
                         with mock.patch.object(app_main, "recycle_live_fetch_site_runtime", new=mock.AsyncMock(return_value=1)) as recycle_mock:
                             with mock.patch.object(app_main, "close_live_fetch_service_runtime", new=mock.AsyncMock()):
-                                app_main._run_fetch_live_service(
-                                    config_path,
-                                    profiles_path,
-                                    args,
-                                    logger,
-                                    monotonic_fn=fake_monotonic,
-                                    sleep_fn=lambda _: None,
-                                )
+                                with mock.patch.object(app_main, "_compute_effective_cycle_sleep_sec", return_value=(300.0, False)):
+                                    app_main._run_fetch_live_service(
+                                        config_path,
+                                        profiles_path,
+                                        args,
+                                        logger,
+                                        monotonic_fn=fake_monotonic,
+                                        sleep_fn=lambda _: None,
+                                    )
 
         recycle_mock.assert_awaited_once()
 
@@ -1695,15 +1737,16 @@ class LiveServiceSchedulingTests(unittest.TestCase):
                             app_main.RuntimeJobError("cycle-2"),
                         ],
                     ):
-                        with self.assertRaisesRegex(app_main.RuntimeJobError, "requires assistance"):
-                            app_main._run_fetch_live_service(
-                                config_path,
-                                profiles_path,
-                                args,
-                                logger,
-                                monotonic_fn=fake_monotonic,
-                                sleep_fn=lambda _: None,
-                            )
+                        with mock.patch.object(app_main, "_compute_effective_cycle_sleep_sec", return_value=(300.0, False)):
+                            with self.assertRaisesRegex(app_main.RuntimeJobError, "requires assistance"):
+                                app_main._run_fetch_live_service(
+                                    config_path,
+                                    profiles_path,
+                                    args,
+                                    logger,
+                                    monotonic_fn=fake_monotonic,
+                                    sleep_fn=lambda _: None,
+                                )
 
     def test_live_service_stops_when_run_report_requires_assistance(self) -> None:
         logger = _build_logger("test.live_service.run_report_assist")
@@ -1729,15 +1772,16 @@ class LiveServiceSchedulingTests(unittest.TestCase):
             with mock.patch.object(app_main, "load_or_create_config", return_value=_build_config(private_only_ads=False)):
                 with mock.patch.object(app_main, "_apply_config_overrides", side_effect=lambda config, raw_args: (config, [])):
                     with mock.patch.object(app_main, "_run_fetch_live_once", return_value=run_report):
-                        with self.assertRaisesRegex(app_main.RuntimeJobError, "requires assistance"):
-                            app_main._run_fetch_live_service(
-                                config_path,
-                                profiles_path,
-                                args,
-                                logger,
-                                monotonic_fn=fake_monotonic,
-                                sleep_fn=lambda _: None,
-                            )
+                        with mock.patch.object(app_main, "_compute_effective_cycle_sleep_sec", return_value=(300.0, False)):
+                            with self.assertRaisesRegex(app_main.RuntimeJobError, "requires assistance"):
+                                app_main._run_fetch_live_service(
+                                    config_path,
+                                    profiles_path,
+                                    args,
+                                    logger,
+                                    monotonic_fn=fake_monotonic,
+                                    sleep_fn=lambda _: None,
+                                )
 
 
 class LiveFetchCommandTests(unittest.TestCase):
@@ -1802,6 +1846,175 @@ class LiveFetchCommandTests(unittest.TestCase):
 
 
 class GuiCommandTests(unittest.TestCase):
+    def test_windows_startup_script_path_points_to_vbs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with mock.patch.dict("os.environ", {"APPDATA": tmpdir}):
+                path = gui_app._windows_startup_script_path()
+
+        self.assertIsNotNone(path)
+        assert path is not None
+        self.assertEqual(path.name, "AffittoV2_GUI.vbs")
+
+    def test_build_windows_startup_vbs_hides_window_and_sets_cwd(self) -> None:
+        content = gui_app._build_windows_startup_vbs(
+            launch_command='"C:\\Python\\pythonw.exe" "C:\\repo\\run.py" gui',
+            app_root=Path(r"C:\repo"),
+        )
+
+        self.assertIn('CreateObject("WScript.Shell")', content)
+        self.assertIn('Set env = shell.Environment("PROCESS")', content)
+        self.assertIn('env("AFFITTO_V2_GUI_AUTOSTART") = "1"', content)
+        self.assertIn('shell.CurrentDirectory = "C:\\repo"', content)
+        self.assertIn('shell.Run ' + '"""C:\\Python\\pythonw.exe"" ""C:\\repo\\run.py"" gui", 0, False', content)
+
+    def test_apply_autostart_writes_vbs_and_removes_legacy_cmd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            startup_dir = Path(tmpdir) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+            startup_dir.mkdir(parents=True, exist_ok=True)
+            legacy_cmd = startup_dir / "AffittoV2_GUI.cmd"
+            legacy_cmd.write_text("@echo off\r\n", encoding="utf-8")
+
+            app = object.__new__(gui_app.AffittoGuiApp)
+            app.autostart_var = _Var(True)
+            app.autostart_service_var = _Var(False)
+            app.bundle_mode = False
+            app.app_root = Path(r"C:\repo")
+            app.run_py = Path(r"C:\repo\run.py")
+            app.status_var = mock.Mock()
+            app.gui_state = {}
+            app.gui_state_path = Path(tmpdir) / "runtime" / "gui_state.json"
+            app._refresh_autostart_controls = mock.Mock()
+
+            with mock.patch.dict("os.environ", {"APPDATA": tmpdir}):
+                with mock.patch.object(gui_app, "_pythonw_or_python", return_value=Path(r"C:\Python\pythonw.exe")):
+                    gui_app.AffittoGuiApp._apply_autostart(app)
+
+            vbs_path = startup_dir / "AffittoV2_GUI.vbs"
+            self.assertTrue(vbs_path.exists())
+            self.assertFalse(legacy_cmd.exists())
+            content = vbs_path.read_text(encoding="utf-8")
+            self.assertIn('env("AFFITTO_V2_GUI_AUTOSTART") = "1"', content)
+            self.assertIn('shell.CurrentDirectory = "C:\\repo"', content)
+            self.assertIn('"""C:\\Python\\pythonw.exe"" ""C:\\repo\\run.py"" gui"', content)
+            app.status_var.set.assert_called_with("Avvio automatico abilitato.")
+
+    def test_apply_autostart_disable_removes_vbs_and_legacy_scripts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            startup_dir = Path(tmpdir) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+            startup_dir.mkdir(parents=True, exist_ok=True)
+            vbs_path = startup_dir / "AffittoV2_GUI.vbs"
+            legacy_cmd = startup_dir / "AffittoV2_GUI.cmd"
+            legacy_bat = startup_dir / "AffittoV2_GUI.bat"
+            for path in (vbs_path, legacy_cmd, legacy_bat):
+                path.write_text("stub\n", encoding="utf-8")
+
+            app = object.__new__(gui_app.AffittoGuiApp)
+            app.autostart_var = _Var(False)
+            app.autostart_service_var = _Var(False)
+            app.bundle_mode = False
+            app.app_root = Path(r"C:\repo")
+            app.run_py = Path(r"C:\repo\run.py")
+            app.status_var = mock.Mock()
+            app.gui_state = {}
+            app.gui_state_path = Path(tmpdir) / "runtime" / "gui_state.json"
+            app._refresh_autostart_controls = mock.Mock()
+
+            with mock.patch.dict("os.environ", {"APPDATA": tmpdir}):
+                gui_app.AffittoGuiApp._apply_autostart(app)
+
+            self.assertFalse(vbs_path.exists())
+            self.assertFalse(legacy_cmd.exists())
+            self.assertFalse(legacy_bat.exists())
+            app.status_var.set.assert_called_with("Avvio automatico disabilitato.")
+
+    def test_is_autostart_enabled_accepts_legacy_cmd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            startup_dir = Path(tmpdir) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+            startup_dir.mkdir(parents=True, exist_ok=True)
+            (startup_dir / "AffittoV2_GUI.cmd").write_text("@echo off\r\n", encoding="utf-8")
+
+            app = object.__new__(gui_app.AffittoGuiApp)
+            with mock.patch.dict("os.environ", {"APPDATA": tmpdir}):
+                enabled = gui_app.AffittoGuiApp._is_autostart_enabled(app)
+
+            self.assertTrue(enabled)
+
+    def test_is_windows_gui_autostart_launch_reads_env_marker(self) -> None:
+        with mock.patch.dict("os.environ", {"AFFITTO_V2_GUI_AUTOSTART": "1"}):
+            self.assertTrue(gui_app._is_windows_gui_autostart_launch())
+        with mock.patch.dict("os.environ", {"AFFITTO_V2_GUI_AUTOSTART": "0"}):
+            self.assertFalse(gui_app._is_windows_gui_autostart_launch())
+
+    def test_refresh_autostart_controls_disables_service_when_gui_autostart_off(self) -> None:
+        app = object.__new__(gui_app.AffittoGuiApp)
+        app.autostart_var = _Var(False)
+        app.autostart_service_var = _Var(True)
+        app.autostart_service_note_var = _Var("")
+        app.autostart_service_check = mock.Mock()
+        app._set_widget_enabled = mock.Mock()
+
+        gui_app.AffittoGuiApp._on_autostart_changed(app)
+
+        self.assertFalse(app.autostart_service_var.get())
+        app._set_widget_enabled.assert_called_with(app.autostart_service_check, False)
+        self.assertIn("Richiede", app.autostart_service_note_var.get())
+
+    def test_maybe_autostart_service_on_windows_launch_starts_service_and_clears_stop_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stop_flag = Path(tmpdir) / "live_service.stop"
+            stop_flag.write_text("stop\n", encoding="utf-8")
+
+            app = object.__new__(gui_app.AffittoGuiApp)
+            app.launched_from_windows_autostart = True
+            app.autostart_var = _Var(True)
+            app.autostart_service_var = _Var(True)
+            app.service_stop_flag_path = stop_flag
+            app.status_var = _Var("")
+            app._enqueue = mock.Mock()
+            app._start_periodic = mock.Mock(return_value=True)
+
+            gui_app.AffittoGuiApp._maybe_autostart_service_on_windows_launch(app)
+
+            self.assertFalse(stop_flag.exists())
+            app._start_periodic.assert_called_once_with(autostart_triggered=True, suppress_dialogs=True)
+            self.assertIn("Avvio automatico Windows rilevato", app.status_var.get())
+
+    def test_maybe_autostart_service_on_windows_launch_skips_manual_open(self) -> None:
+        app = object.__new__(gui_app.AffittoGuiApp)
+        app.launched_from_windows_autostart = False
+        app.autostart_var = _Var(True)
+        app.autostart_service_var = _Var(True)
+        app.service_stop_flag_path = Path(r"C:\tmp\live_service.stop")
+        app.status_var = _Var("")
+        app._enqueue = mock.Mock()
+        app._start_periodic = mock.Mock()
+
+        gui_app.AffittoGuiApp._maybe_autostart_service_on_windows_launch(app)
+
+        app._start_periodic.assert_not_called()
+
+    def test_apply_autostart_persists_service_flag_only_when_gui_autostart_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            startup_dir = Path(tmpdir) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+            startup_dir.mkdir(parents=True, exist_ok=True)
+
+            app = object.__new__(gui_app.AffittoGuiApp)
+            app.autostart_var = _Var(False)
+            app.autostart_service_var = _Var(True)
+            app.bundle_mode = False
+            app.app_root = Path(r"C:\repo")
+            app.run_py = Path(r"C:\repo\run.py")
+            app.status_var = mock.Mock()
+            app.gui_state = {}
+            app.gui_state_path = Path(tmpdir) / "runtime" / "gui_state.json"
+            app._refresh_autostart_controls = mock.Mock()
+
+            with mock.patch.dict("os.environ", {"APPDATA": tmpdir}):
+                gui_app.AffittoGuiApp._apply_autostart(app)
+
+            self.assertFalse(app.autostart_service_var.get())
+            self.assertFalse(app.gui_state["autostart_service_enabled"])
+
     def test_build_fetch_command_omits_removed_channel_rotation_flag(self) -> None:
         app = object.__new__(gui_app.AffittoGuiApp)
         app.notify_mode_var = _Var("telegram")

@@ -5,6 +5,20 @@
   - `session_policy.py`: Chrome/134 → Firefox/135.0
   - `render_context.py`: UA aggiornato, deviceMemory rimosso dal template JS
   - stato: applicata, in attesa di soak
+- `2.3-patch-02` (`2026-03-31`): canvas noise seed per-generazione + jitter ciclo servizio + fascia notturna locale
+  - `persona.py`, `core_types.py`, `session_policy.py`, `render_context.py`, `live_fetch.py`: identita canvas resa deterministica per generazione
+  - `main.py`: jitter diurno, finestra notturna locale, moltiplicatore notturno `6.5`, floor runtime a `3` minuti
+  - `models.py`, `gui_app.py`: minimo `3` minuti allineato tra config e GUI
+  - stato: applicata, test verdi, soak operativo ancora da chiudere
+- `2.3-patch-03` (`2026-03-31`): autostart Windows silenzioso via `.vbs`
+  - `gui_app.py`: Startup wrapper migrato a `.vbs`, cleanup silenzioso di `.cmd/.bat`, detection compatibile con legacy
+  - `tests/test_private_only_and_logging.py`: copertura su path, contenuto e cleanup autostart
+  - stato: applicata, test verdi, verifica reale post-reboot ancora da chiudere
+- `2.3-patch-04` (`2026-03-31`): autostart del servizio continuo solo da boot Windows
+  - `gui_app.py`: checkbox dipendente `autostart_service_enabled`, marker env nel wrapper Startup, start automatico solo nel ramo boot-autostart
+  - `gui_app.py`: stop-flag stale rimossa solo prima dell'avvio automatico, path non interattivo senza dialog bloccanti se la config e invalida
+  - `tests/test_private_only_and_logging.py`: copertura su env marker, gating manuale vs boot, persistenza flag e cleanup stop-flag
+  - stato: applicata, test verdi, verifica reale post-reboot ancora da chiudere
 
 ## Patch chiuse che definiscono l'apertura della `2.3_test`
 - cutover del `2026-03-30`:

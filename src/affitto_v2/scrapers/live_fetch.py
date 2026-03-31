@@ -7,7 +7,7 @@ import random
 import re
 import sys
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
@@ -1218,6 +1218,13 @@ async def _launch_browser_session(
                     persona.window_height,
                     persona.humanize_max_sec,
                 )
+                selected_hardware = replace(
+                    policy.hardware,
+                    canvas_noise_mode="persona_seeded",
+                    canvas_r_offset=persona.canvas_r_offset,
+                    canvas_g_offset=persona.canvas_g_offset,
+                    canvas_b_offset=persona.canvas_b_offset,
+                )
             else:
                 launch_kwargs = _camoufox_launch_kwargs(
                     headless=headless,
@@ -1236,7 +1243,8 @@ async def _launch_browser_session(
                     "camoufox_path" if executable_path is not None else "camoufox_default",
                     policy.user_agent,
                 )
-            await install_render_context_init_script(context, hardware=policy.hardware, logger=logger)
+                selected_hardware = policy.hardware
+            await install_render_context_init_script(context, hardware=selected_hardware, logger=logger)
             await bootstrap_static_resources_cache(context, logger=logger, site=site)
             page = context.pages[0] if context.pages else await context.new_page()
             logger.info(

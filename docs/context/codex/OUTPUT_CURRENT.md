@@ -1,40 +1,39 @@
 # OUTPUT_CURRENT.md
 
 ## Patch corrente
-`2.3-patch-01` - Allineamento UA/TLS Firefox/135.0 + rimozione patch `navigator.deviceMemory`.
+`2.3-patch-04` - Autostart servizio continuo solo da boot Windows
 
 ## Stato
-Patch applicata. Codice verificato. In attesa di soak su sessione reale.
+Patch applicata. Suite test verde.
 
-Backend operativo: `camoufox`. State machine, pacing, guard, profili: invariati.
+Backend operativo: `camoufox`.
+State machine, guard, parser, `private_only`: invariati.
 
-## Implementazione eseguita nella patch
+## Implementazione eseguita
 
-### File modificati
-- `src/affitto_v2/scrapers/browser/session_policy.py`
-  - `_DEFAULT_USER_AGENT`: Chrome/134 -> Firefox/135.0
-- `src/affitto_v2/scrapers/render_context.py`
-  - `HardwareMimetics` inline (x2): UA Chrome -> Firefox/135.0
-  - rimossa `defineNavigatorValue('deviceMemory', ...)` dal template JS
-  - rimossa sostituzione `__DEVICE_MEMORY__` nel builder
-  - rimosso campo `navigator_device_memory` dal log
+### C1 - Autostart servizio continuo
+- `gui_app.py`
+  - aggiunta checkbox dipendente "Avvia anche il servizio continuo al boot"
+  - stato GUI esteso con `autostart_service_enabled`
+  - il wrapper Startup `.vbs` esporta `AFFITTO_V2_GUI_AUTOSTART=1`
+  - la GUI avvia il servizio automaticamente solo se:
+    - e stata lanciata dal boot Windows tramite autostart
+    - `autostart_enabled=True`
+    - `autostart_service_enabled=True`
+  - le aperture manuali della GUI non avviano mai il servizio da sole
+  - una vecchia `live_service.stop` viene rimossa solo nel percorso boot-autostart
+  - configurazione invalida durante l'avvio automatico: log warning e nessun dialog bloccante
 
-### Motivazione
-camoufox e Firefox-based. Il TLS fingerprint e Firefox. Dichiarare Chrome/134 come UA creava un mismatch rilevabile passivamente (JA4, DataDome, Cloudflare). `navigator.deviceMemory` e una proprieta Chrome-only: patcharla su Firefox segnalava un'ulteriore anomalia JS.
-
-### Cosa NON e cambiato
-- comportamento di rotazione profili
-- state machine e guard
-- pacing Gamma
-- bootstrap static resources
-- DataDome challenge detection
-- WebGL strings e hardwareConcurrency
+## Test
+- `pytest -q` -> `100 passed`
+- test aggiunti/aggiornati su:
+  - marker env `AFFITTO_V2_GUI_AUTOSTART`
+  - contenuto VBS aggiornato
+  - checkbox dipendente quando l'autostart GUI e off
+  - start automatico del servizio solo nel launch da boot
+  - cleanup della stop-flag stale
+  - persistenza corretta del flag servizio
 
 ## Nota residua
-- `requirements.txt` porta avanti `undetected-playwright==0.3.0` dalla root sorgente; incluso nel primo rilascio `2.3_test`, ma senza un nuovo path operativo dichiarato nel codice prodotto
-
-## Prossime slice plausibili
-- soak osservativo della patch UA/TLS su sessione reale
-- `immobiliare adaptive prepare`
-- notifica blocco lungo `>= 1h` + recovery
-- `soft mode` locale post-`hard_block`
+- manca verifica reale post-reboot su Windows per confermare il launch condizionato del servizio
+- `A2` resta comunque in attesa di soak operativo diurno/notturno

@@ -91,6 +91,9 @@ class CamoufoxPersona:
     history_length: int
     font_spacing_seed: int
     canvas_aa_offset: int
+    canvas_r_offset: int
+    canvas_g_offset: int
+    canvas_b_offset: int
     launch_options: dict[str, object]
 
 

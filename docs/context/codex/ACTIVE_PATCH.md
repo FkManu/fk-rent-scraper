@@ -1,40 +1,33 @@
 # ACTIVE_PATCH.md
 
 ## Patch corrente
-`2.3-patch-01` — Allineamento UA/TLS: Chrome UA → Firefox/135.0 + rimozione patch `navigator.deviceMemory`
+`2.3-patch-04` - Autostart servizio continuo solo da boot Windows
 
 ## Obiettivo
-Eliminare l'inconsistenza TLS/UA ereditata dalla `2.2`:
-- camoufox e Firefox-based, il TLS fingerprint e Firefox
-- il UA dichiarato era Chrome/134 → mismatch rilevabile passivamente (JA4, DataDome, Cloudflare)
-- `navigator.deviceMemory` veniva patchato a `16` ma Firefox non espone questa proprieta → anomalia JS
+Permettere l'avvio automatico del servizio continuo solo quando la GUI viene aperta dal boot Windows tramite autostart, senza far partire il servizio nelle aperture manuali.
 
 ## Scope
-- `src/affitto_v2/scrapers/browser/session_policy.py` — UA Chrome → Firefox/135.0
-- `src/affitto_v2/scrapers/render_context.py`:
-  - UA nei HardwareMimetics inline aggiornato a Firefox/135.0
-  - rimossa riga `defineNavigatorValue('deviceMemory', ...)` dal template JS
-  - rimossa sostituzione `__DEVICE_MEMORY__` nel builder
-  - aggiornato log `install_render_context_init_script` (rimosso campo `navigator_device_memory`)
+- `src/affitto_v2/gui_app.py`
+  - nuova checkbox dipendente `autostart_service_enabled`
+  - autostart GUI salva lo stato anche del servizio
+  - marker esplicito `AFFITTO_V2_GUI_AUTOSTART=1` nel wrapper Startup `.vbs`
+  - start automatico del servizio solo nel ramo "boot Windows via autostart"
+  - rimozione della stop-flag stale solo nel ramo boot-autostart
+  - avvio non interattivo senza dialog bloccanti se la config e invalida
+- `tests/test_private_only_and_logging.py`
+  - copertura dedicata per marker env, checkbox dipendente e start automatico condizionato
 
 ## Non-scope
-- nessuna variazione a state machine, pacing, guard, profili
-- nessun cambio a `live_fetch.py` (policy.user_agent viene letto automaticamente)
-- nessuna variazione a WebGL strings o hardwareConcurrency
-- nessuna variazione al canvas noise
+- nessuna variazione a scheduler, guard, parser, `private_only`
+- nessun cambio al comportamento delle aperture manuali della GUI
+- nessuna variazione ai criteri di stop del servizio continuo
 
 ## Invarianti preservati
-- comportamento di rotazione profili invariato
-- pacing Gamma invariato
-- bootstrap static resources invariato
-- DataDome detection invariata
-- session continuity invariata
-
-## Done quando
-- `session_policy.py` usa Firefox/135.0 su entrambi i siti
-- `render_context.py` non patcha piu `navigator.deviceMemory`
-- UA coerente tra TLS handshake, HTTP header e `navigator.userAgent` JS
-- nessun riferimento a Chrome/134 nel codice prodotto
+- checkbox GUI e start/stop manuali invariati
+- `autostart_service_enabled` e operativo solo se `autostart_enabled=True`
+- assenza di `APPDATA` -> warning invariato
+- bundle e sorgente continuano a usare lo stesso launcher applicativo di prima
 
 ## Stato
-COMPLETO — in attesa di soak su sessione reale
+COMPLETO lato codice e test.
+In attesa di verifica reale post-reboot su Windows.
