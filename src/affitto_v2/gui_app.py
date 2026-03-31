@@ -481,6 +481,7 @@ class AffittoGuiApp:
         self._build_urls_frame(config_left).grid(row=0, column=0, sticky="ew", pady=(0, 8))
         self._build_channel_mode_frame(config_left).grid(row=1, column=0, sticky="ew", pady=(0, 8))
         self._build_telegram_frame(config_left).grid(row=2, column=0, sticky="ew")
+        self._build_maintenance_frame(config_left).grid(row=3, column=0, sticky="ew", pady=(8, 0))
         self._build_email_frame(config_right).grid(row=0, column=0, sticky="ew", pady=(0, 8))
         self._build_actions_frame(config_right).grid(row=1, column=0, sticky="ew")
 
@@ -779,34 +780,39 @@ class AffittoGuiApp:
         self.start_btn.grid(row=5, column=0, sticky="ew", padx=8, pady=6)
         self.stop_btn = ttk.Button(frame, text="Stop", command=self._stop_running, state=tk.DISABLED)
         self.stop_btn.grid(row=6, column=0, sticky="ew", padx=8, pady=6)
+        return frame
+
+    def _build_maintenance_frame(self, parent: ttk.Frame) -> ttk.LabelFrame:
+        frame = ttk.LabelFrame(parent, text="Reset e Avvio Automatico")
+        frame.columnconfigure(0, weight=1)
         ttk.Button(frame, text="Reset Site Guard", command=self._reset_guard).grid(
-            row=7, column=0, sticky="ew", padx=8, pady=6
+            row=0, column=0, sticky="ew", padx=8, pady=(8, 6)
         )
         ttk.Button(frame, text="Reset DB Annunci", command=self._reset_listings_db).grid(
-            row=8, column=0, sticky="ew", padx=8, pady=6
+            row=1, column=0, sticky="ew", padx=8, pady=6
         )
         ttk.Button(frame, text="Reset Profili/Debug Runtime", command=self._reset_runtime_privacy_state).grid(
-            row=9, column=0, sticky="ew", padx=8, pady=6
+            row=2, column=0, sticky="ew", padx=8, pady=6
         )
-        ttk.Separator(frame).grid(row=10, column=0, sticky="ew", padx=8, pady=(8, 6))
+        ttk.Separator(frame).grid(row=3, column=0, sticky="ew", padx=8, pady=(8, 6))
         ttk.Checkbutton(frame, text="Avvio automatico GUI (Windows)", variable=self.autostart_var).grid(
-            row=11, column=0, sticky="w", padx=8, pady=(4, 2)
+            row=4, column=0, sticky="w", padx=8, pady=(4, 2)
         )
         self.autostart_service_check = ttk.Checkbutton(
             frame,
             text="Avvia anche il servizio continuo al boot",
             variable=self.autostart_service_var,
         )
-        self.autostart_service_check.grid(row=12, column=0, sticky="w", padx=24, pady=(0, 2))
+        self.autostart_service_check.grid(row=5, column=0, sticky="w", padx=24, pady=(0, 2))
         ttk.Label(
             frame,
             textvariable=self.autostart_service_note_var,
             foreground="#2f4f4f",
             wraplength=420,
             justify=tk.LEFT,
-        ).grid(row=13, column=0, sticky="w", padx=8, pady=(0, 4))
+        ).grid(row=6, column=0, sticky="w", padx=8, pady=(0, 4))
         ttk.Button(frame, text="Applica Avvio Automatico", command=self._apply_autostart).grid(
-            row=14, column=0, sticky="ew", padx=8, pady=(2, 8)
+            row=7, column=0, sticky="ew", padx=8, pady=(2, 8)
         )
         return frame
 
