@@ -122,6 +122,10 @@
   - `idealista` mantiene forte continuita di sessione sullo stesso profilo
   - `immobiliare` resta sano ma ricicla periodicamente il solo slot locale per `slot_reuse_cap`
   - il limite aperto piu concreto si sposta dalla tenuta anti-bot alla precisione residua di `private_only`
+- fix del `2026-04-01` su soak `3 minuti` / `immobiliare`:
+  - rimosso il recycle preventivo del solo site-slot nel service loop
+  - il servizio non ricicla piu `immobiliare` per `slot_reuse_cap` o `session_age_cap`
+  - resta attiva la rotazione del profilo solo nei path di block reali (`hard_block` / DataDome)
 - fix successivo del `2026-03-26` su `private_only`:
   - aggiunta memoria negativa dedicata per annunci professionali rilevati dal detail-check Idealista
   - nuova tabella DB `private_only_agency_cache` separata dal flusso `listings`

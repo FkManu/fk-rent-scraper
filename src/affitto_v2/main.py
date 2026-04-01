@@ -84,57 +84,11 @@ class RuntimeDispositionDecision:
     reason: str = ""
 
 
-_PREEMPTIVE_SITE_SLOT_RECYCLE_LIMITS: dict[str, dict[str, int]] = {
-    "immobiliare": {
-        "max_age_sec": 5400,
-        "max_reuse_count": 12,
-    }
-}
 _LIVE_SERVICE_CYCLE_JITTER_SIGMA_SEC = 25.0
 _LIVE_SERVICE_CYCLE_JITTER_CLAMP_SEC = 30.0
 _LIVE_SERVICE_NIGHT_START_HOUR = 1
 _LIVE_SERVICE_NIGHT_END_HOUR = 7
 _LIVE_SERVICE_NIGHT_MULTIPLIER = 6.5
-
-
-def _maybe_preemptive_site_slot_recycle(
-    *,
-    slot_summary: dict[str, dict[str, object]],
-    logger,
-) -> RuntimeDispositionDecision:
-    if not slot_summary:
-        return RuntimeDispositionDecision()
-    for site, limits in _PREEMPTIVE_SITE_SLOT_RECYCLE_LIMITS.items():
-        snapshot = slot_summary.get(site)
-        if not snapshot:
-            continue
-        age_sec = int(snapshot.get("max_age_sec", 0) or 0)
-        reuse_count = int(snapshot.get("max_reuse_count", 0) or 0)
-        if age_sec < int(limits.get("max_age_sec", 0) or 0) and reuse_count < int(
-            limits.get("max_reuse_count", 0) or 0
-        ):
-            continue
-        reason_parts: list[str] = []
-        if age_sec >= int(limits.get("max_age_sec", 0) or 0):
-            reason_parts.append("session_age_cap")
-        if reuse_count >= int(limits.get("max_reuse_count", 0) or 0):
-            reason_parts.append("slot_reuse_cap")
-        logger.info(
-            "Preemptive site slot recycle candidate. site=%s age_sec=%s reuse_count=%s owner_count=%s channel=%s thresholds=%s",
-            site,
-            age_sec,
-            reuse_count,
-            int(snapshot.get("owner_count", 0) or 0),
-            str(snapshot.get("channel_label", "") or "unknown"),
-            limits,
-        )
-        return RuntimeDispositionDecision(
-            action="recycle_site_slot",
-            site=site,
-            reason="+".join(reason_parts) or "preventive_recycle",
-        )
-    return RuntimeDispositionDecision()
-
 
 def _is_live_service_night_mode(now_local: datetime) -> bool:
     return _LIVE_SERVICE_NIGHT_START_HOUR <= now_local.hour < _LIVE_SERVICE_NIGHT_END_HOUR
@@ -1432,11 +1386,6 @@ def _run_fetch_live_service(
                 cycle_report=cycle_report,
                 service_state=service_state,
             )
-            if disposition.action == "keep":
-                disposition = _maybe_preemptive_site_slot_recycle(
-                    slot_summary=slot_summary,
-                    logger=logger,
-                )
             logger.info(
                 "Live fetch service runtime disposition. cycle=%s action=%s site=%s reason=%s pooled_sessions=%s",
                 cycle_number,

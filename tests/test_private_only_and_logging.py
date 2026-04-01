@@ -1392,7 +1392,7 @@ class LiveServiceSchedulingTests(unittest.TestCase):
         self.assertEqual(decision.site, "idealista")
         self.assertEqual(decision.reason, "site_blocked")
 
-    def test_preemptive_site_slot_recycle_triggers_for_long_immobiliare_session(self) -> None:
+    def test_runtime_disposition_does_not_preemptively_recycle_long_immobiliare_session(self) -> None:
         runtime = live_fetch.LiveFetchServiceRuntime(
             session_slots={
                 "immobiliare|chrome|profile": live_fetch.BrowserSessionSlot(
@@ -1409,16 +1409,10 @@ class LiveServiceSchedulingTests(unittest.TestCase):
                 )
             }
         )
+        slot_summary = live_fetch.service_runtime_site_slot_snapshot(runtime, now_monotonic=5600.0)
 
-        decision = app_main._maybe_preemptive_site_slot_recycle(
-            slot_summary=live_fetch.service_runtime_site_slot_snapshot(runtime, now_monotonic=5600.0),
-            logger=_build_logger("test.preemptive_recycle"),
-        )
-
-        self.assertEqual(decision.action, "recycle_site_slot")
-        self.assertEqual(decision.site, "immobiliare")
-        self.assertIn("session_age_cap", decision.reason)
-        self.assertIn("slot_reuse_cap", decision.reason)
+        self.assertEqual(slot_summary["immobiliare"]["max_reuse_count"], 13)
+        self.assertGreaterEqual(slot_summary["immobiliare"]["max_age_sec"], 5580)
 
     def test_runtime_disposition_recycles_runtime_on_cycle_failure(self) -> None:
         decision = app_main._decide_runtime_disposition(
