@@ -1,10 +1,10 @@
-# STATE_MACHINE_2_3_TEST.md
+# STATE_MACHINE_2_3_STABLE.md
 
 ## Scopo
-Definire il modello di stato minimo della linea `2.3_test`.
+Definire il modello di stato minimo della linea `2.3_stable`.
 
 ## Regola generale
-La linea `2.3_test` eredita la state machine osservabile gia consolidata in `2.2`.
+La linea `2.3_stable` eredita la state machine osservabile gia consolidata in `2.2`.
 
 Ogni stato continua a implicare:
 - azioni consentite
@@ -59,10 +59,10 @@ Esito chiaramente non utilizzabile o policy di stop definitivo per il run.
 ## Trigger di riferimento
 I passaggi a `cooldown`, `frozen`, `assist_required` e `blocked` devono seguire la tabella in:
 
-- `STOP_TRIGGERS_2_3_TEST.md`
+- `STOP_TRIGGERS_2_3_STABLE.md`
 
 ## Traduzione attuale in codice
-Alla nascita della linea `2.3_test` la traduzione in codice e ereditata pari dalla baseline `2.2 stable`.
+Alla nascita della linea `2.3_stable` la traduzione in codice e ereditata pari dalla baseline `2.2 stable`.
 
 Restano quindi attivi:
 - state machine tabellare in `src/affitto_v2/scrapers/guard/state_machine.py`
@@ -71,6 +71,6 @@ Restano quindi attivi:
 - distruzione del profilo persistente precedente nella root gestita
 
 ## Nota pratica
-La `2.3_test` non nasce per ridefinire subito questa state machine.
+La `2.3_stable` non nasce per ridefinire subito questa state machine.
 
 Le prime patch sensate lavorano sopra il modello esistente, non contro di esso.

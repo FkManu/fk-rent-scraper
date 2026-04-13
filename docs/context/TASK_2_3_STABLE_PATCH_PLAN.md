@@ -1,7 +1,7 @@
 # TASK_2_3_PATCH_PLAN.md
 
 ## Titolo
-Piano patch `2.3_test` - stealth, operativa e GUI
+Piano patch `2.3_stable` - stealth, operativa e GUI
 
 ## Owner
 Backend / Codex
@@ -10,7 +10,7 @@ Backend / Codex
 Ready con gate obbligatori.
 
 ## Linea di riferimento
-`2.3_test` - baseline ereditata da `2.2.2 refactorizzata`
+`2.3_stable` - baseline ereditata da `2.2.2 refactorizzata`
 
 Patch attiva precedente:
 - `2.3-patch-01`

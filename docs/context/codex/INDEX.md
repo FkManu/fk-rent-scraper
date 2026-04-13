@@ -1,6 +1,6 @@
-# Codex Workflow - 2.3_test
+# Codex Workflow - 2.3_stable
 
-Workflow Codex ridotto all'essenziale per la linea `2.3_test`.
+Workflow Codex ridotto all'essenziale per la linea `2.3_stable`.
 
 ## Documenti vivi
 - `ACTIVE_PATCH.md` -> focus corrente della linea

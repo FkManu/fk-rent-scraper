@@ -1,7 +1,7 @@
-# EXPERIMENT_PLAN_2_3_TEST.md
+# EXPERIMENT_PLAN_2_3_STABLE.md
 
 ## Scopo
-Rendere `2.3_test` una linea misurabile fin dal primo step.
+Rendere `2.3_stable` una linea misurabile fin dal primo step.
 
 ## Telemetria minima da conservare
 - `site`
@@ -43,7 +43,7 @@ Ogni run continua ad avere budget separati:
 ## Esperimenti iniziali consigliati
 
 ### E0 - Parity freeze
-- ipotesi: `2.3_test` parte con comportamento osservabile allineato a `2.2 stable`
+- ipotesi: `2.3_stable` parte con comportamento osservabile allineato a `2.2 stable`
 - metrica primaria: parita di outcome tier e state transitions su run comparabili
 - rischio: drift introdotto dal solo cutover locale
 

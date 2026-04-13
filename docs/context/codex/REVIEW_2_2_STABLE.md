@@ -4,7 +4,7 @@
 VERDE
 
 ## Oggetto review
-Chiusura della linea `2.2 stable` al momento dell'apertura di `2.3_test`.
+Chiusura della linea `2.2 stable` al momento dell'apertura di `2.3_stable`.
 
 ## Esito sintetico
 La linea `2.2` viene presa come baseline tecnica stabile della nuova iterazione.
@@ -18,9 +18,9 @@ Punti consolidati:
 - refactor strutturale gia avviato del motore live
 
 ## Decisione registrata
-`2.3_test` nasce come copia completa della root `2.2_test`, ma con documentazione viva ripulita e archivio storico separato.
+`2.3_stable` nasce come copia completa della root `2.2_test`, ma con documentazione viva ripulita e archivio storico separato.
 
 ## Nota residua
 Le prossime attivita non devono riaprire casualmente il contesto `2.2`.
 
-Devono partire dalla nuova root `2.3_test` con patch piccole, comparabili e isolate.
+Devono partire dalla nuova root `2.3_stable` con patch piccole, comparabili e isolate.

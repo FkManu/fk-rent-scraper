@@ -1,6 +1,6 @@
 # Codex Archive 2.2
 
-Qui vive lo snapshot dei file Codex vivi della linea `2.2` al momento del taglio di `2.3_test`.
+Qui vive lo snapshot dei file Codex vivi della linea `2.2` al momento del taglio di `2.3_stable`.
 
 Contiene:
 - `ACTIVE_PATCH.md`

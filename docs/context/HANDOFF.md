@@ -1,7 +1,7 @@
 # HANDOFF.md
 
 ## Stato attuale
-- `2.3_test` e stata creata il `2026-03-30` come copia completa e separata di `2.2_test`
+- `2.3_stable` e stata creata il `2026-03-30` come copia completa e separata di `2.2_test`
 - il codice prodotto della nuova root parte allineato alla baseline `2.2.2 refactorizzata`
 - `2.2_test` resta la linea di riferimento appena congelata come `2.2 stable`
 - la documentazione viva e stata riallineata alla nuova linea
@@ -10,7 +10,7 @@
   - `docs/context/codex/archive/2_2/`
 
 ## Decisione di progetto
-La `2.3_test` non nasce per introdurre subito nuove feature.
+La `2.3_stable` non nasce per introdurre subito nuove feature.
 
 Nasce per:
 - tenere l'ambiente locale separato dalla `2.2`
@@ -28,8 +28,8 @@ Nasce per:
 - refactor strutturale gia avviato del motore live
 
 ## Cosa e cambiato nel taglio
-- nuova root locale `2.3_test`
-- nuovo manifest di linea `2_3_TEST_MANIFEST.md`
+- nuova root locale `2.3_stable`
+- nuovo manifest di linea `2_3_STABLE_MANIFEST.md`
 - nuova strategia e nuovi documenti `2.3`
 - archivio interno del contesto `2.2`
 
@@ -44,17 +44,17 @@ La copia completa ha trascinato anche stato locale della root sorgente.
 In particolare:
 - `requirements.txt` include `undetected-playwright==0.3.0`
 
-Nel primo rilascio `2.3_test` questo delta viene portato avanti cosi com'e, senza introdurre ancora un uso operativo dichiarato nel codice prodotto.
+Nel primo rilascio `2.3_stable` questo delta viene portato avanti cosi com'e, senza introdurre ancora un uso operativo dichiarato nel codice prodotto.
 
 ## File da leggere per ripartire
 - `README.md`
 - `docs/context/README.md`
 - `docs/context/NEXT_STEPS.md`
-- `docs/context/STRATEGY_2_3_TEST.md`
+- `docs/context/STRATEGY_2_3_STABLE.md`
 - `docs/context/codex/OUTPUT_CURRENT.md`
 - `docs/risk_scoring_e_griglia_segnali_antibot.md`
 
 ## Prossimo passo sensato
-- verificare la parita osservabile tra `2.2_test` e `2.3_test`
+- verificare la parita osservabile tra `2.2_test` e `2.3_stable`
 - decidere il primo asse sperimentale della `2.3`
 - aprire poi una patch piccola e comparabile, senza mischiare piu fronti

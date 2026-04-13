@@ -1,10 +1,10 @@
-# STRATEGY_2_3_TEST.md
+# STRATEGY_2_3_STABLE.md
 
 ## Scopo
-Definire la strategia della linea `2.3_test` come evoluzione separata della linea `2.2 stable`.
+Definire la strategia della linea `2.3_stable` come evoluzione separata della linea `2.2 stable`.
 
 ## Punto di partenza
-`2.3_test` non parte da una foundation grezza.
+`2.3_stable` non parte da una foundation grezza.
 
 Parte da una base gia consolidata:
 - backend operativo `camoufox`
@@ -17,7 +17,7 @@ Il file guida di riferimento resta:
 - `docs/risk_scoring_e_griglia_segnali_antibot.md`
 
 ## Decisione di progetto
-La linea `2.3_test` non deve riaprire in modo casuale la strategia `2.2`.
+La linea `2.3_stable` non deve riaprire in modo casuale la strategia `2.2`.
 
 Deve invece lavorare sopra la baseline gia stabilizzata per:
 - ridurre ancora il rumore locale dove i log lo giustificano
@@ -25,7 +25,7 @@ Deve invece lavorare sopra la baseline gia stabilizzata per:
 - completare le slice piccole rimaste aperte
 - mantenere la separazione netta con la linea `2.2` considerata stable
 
-## Confine tra `2.2 stable` e `2.3_test`
+## Confine tra `2.2 stable` e `2.3_stable`
 
 ### `2.2 stable`
 Percorso shipping:
@@ -34,14 +34,14 @@ Percorso shipping:
 - packaging e validazione distribuzione
 - nessun salto di strategia senza nuova evidenza
 
-### `2.3_test`
+### `2.3_stable`
 Percorso laboratorio disciplinato:
 - refinements per-sito
 - osservabilita operativa nuova
 - alleggerimenti locali del costo interazionale
 - ulteriori slice strutturali solo se aiutano leggibilita e sicurezza della linea
 
-## Assi di lavoro plausibili per `2.3_test`
+## Assi di lavoro plausibili per `2.3_stable`
 
 ### 1. `immobiliare adaptive prepare`
 Obiettivo:
@@ -83,7 +83,7 @@ Vincoli:
 ### 1. Preservare prima di cambiare
 La linea `2.2.2 refactorizzata` e la baseline pratica di partenza.
 
-Ogni patch `2.3_test` deve dire esplicitamente:
+Ogni patch `2.3_stable` deve dire esplicitamente:
 - cosa preserva
 - cosa cambia
 - come si confronta con `2.2`
@@ -97,7 +97,7 @@ Non aprire patch che mischiano:
 - packaging
 
 ### 3. Misurare prima di promuovere
-Le patch della `2.3_test` devono essere confrontabili su soak, log e costo operativo.
+Le patch della `2.3_stable` devono essere confrontabili su soak, log e costo operativo.
 
 ### 4. Nessun ritorno a scorciatoie dismesse
 Restano fuori scope:
@@ -108,7 +108,7 @@ Restano fuori scope:
 - patch speculative fuori dai sintomi reali
 
 ## Output atteso della linea
-La `2.3_test` deve diventare:
+La `2.3_stable` deve diventare:
 - una linea di evoluzione pulita della `2.2`
 - con backlog piu stretto
 - con contesto storico chiaro

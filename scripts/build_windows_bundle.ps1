@@ -17,7 +17,7 @@ $CliExe = Join-Path $DistRoot "affitto_cli.exe"
 $CliTarget = Join-Path $GuiDist "affitto_cli.exe"
 $LegacyPreviewZip = Join-Path $DistRoot "affitto_2_2_preview_bundle.zip"
 $LegacyStableZip = Join-Path $DistRoot "affitto_2_2_stable_bundle.zip"
-$ReleaseZip = Join-Path $DistRoot "affitto_2_3_test_bundle.zip"
+$ReleaseZip = Join-Path $DistRoot "affitto_2_3_stable_bundle.zip"
 $ZipTarget = $ReleaseZip
 
 Write-Host "Python:" $Python
@@ -35,7 +35,7 @@ if (Test-Path $ReleaseZip) {
     }
     catch {
         $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-        $ZipTarget = Join-Path $DistRoot ("affitto_2_3_test_bundle_" + $stamp + ".zip")
+        $ZipTarget = Join-Path $DistRoot ("affitto_2_3_stable_bundle_" + $stamp + ".zip")
         Write-Warning "Release zip locked, fallback target: $ZipTarget"
     }
 }

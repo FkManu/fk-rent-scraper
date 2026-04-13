@@ -7,12 +7,12 @@
        - 2.1_stable: baseline storicamente importante, congelata come release stabile
        - 2.2_stable: versione precedente di questo taglio (ora congelata)
        - 2.2_test: evoluzione della 2.2, usata come laboratorio prima di diventare stable
-       - 2.3_test: VERSIONE CORRENTE - creata il 2026-03-30 come copia completa di 2.2_test per aprire il
+       - 2.3_stable: VERSIONE CORRENTE - creata il 2026-03-30 come copia completa di 2.2_test per aprire il
        prossimo ciclo di lavoro in ambiente separato
 
        Organizzazione del perimetro Git pulito (escludendo .venv, node_modules, pycache, build, dist,
        runtime):
-       2.3_test/
+       2.3_stable/
        ├── src/affitto_v2/          # codice sorgente principale
        ├── tests/                   # suite di test (85 test OK alla patch 2.2.2)
        ├── scripts/                 # script di setup e build (PowerShell per Windows)
@@ -101,7 +101,7 @@
        - cooling (outcome) → skip pulito per cooldown
        - blocked (outcome) → fine run, assist richiesto
 
-       Triggers stop minimi (STOP_TRIGGERS_2_3_TEST.md):
+       Triggers stop minimi (STOP_TRIGGERS_2_3_STABLE.md):
        - Primo challenge → cooldown breve
        - Due challenge ravvicinati → frozen
        - Budget esaurito (page/detail/identity/retry) → stop sito
@@ -212,7 +212,7 @@
        ┤
        │ Bundle Windows  │ Packaging   │ PyInstaller bundle stabile con runtime Tcl/Tk incluso, naming
        │
-│                 │             │ affitto_2_3_test_bundle.zip
+│                 │             │ affitto_2_3_stable_bundle.zip
        │
        ├─────────────────┼─────────────┼──────────────────────────────────────────────────────────────────
        ┤
@@ -293,7 +293,7 @@
 
        Milestone 1: Parity Validation (APERTA)
 
-       Obiettivo: Confermare che 2.3_test parta osservabilmente allineata a 2.2
+       Obiettivo: Confermare che 2.3_stable parta osservabilmente allineata a 2.2
 
        Deliverable:
        - Verifica parita outcome_tier, state_transition, runtime_disposition, service_state
@@ -423,12 +423,12 @@
 
        Regola pratica per patch
 
-       Ogni patch di 2.3_test DEVE:
+       Ogni patch di 2.3_stable DEVE:
        - Preservare il comportamento sano della 2.2
        - E inoltre, ridurre rumore OPPURE migliorare osservabilita OPPURE migliorare private_only in modo
        misurabile
 
-       Confine tra 2.2 stable e 2.3_test
+       Confine tra 2.2 stable e 2.3_stable
 
        2.2 stable (shipping line):
        - Mantenimento consolidato
@@ -436,7 +436,7 @@
        - Packaging e validazione distribuzione
        - Nessun salto strategia senza nuova evidenza
 
-       2.3_test (disciplined lab):
+       2.3_stable (disciplined lab):
        - Refinement per-sito
        - Osservabilita operativa nuova
        - Alleggerimento costi interazionali
@@ -753,7 +753,7 @@
        - Si ferma quando il sito rifiuta chiaramente
 
        ---
-       13. ROADMAP IMMEDIATA (2.3_test)
+       13. ROADMAP IMMEDIATA (2.3_stable)
 
        1. MILESTONE 1: Parity Validation ← APERTA ADESSO
          - Soak su VM parallela per confronto 2.2 vs 2.3
@@ -795,13 +795,13 @@
         │
        ├───────────────────────────────────────────────────┼──────────────┼─────────────────────┼─────────
        ─┤
-       │ docs/context/STRATEGY_2_3_TEST.md                 │ Charter      │ Linee guida per     │ READ
+       │ docs/context/STRATEGY_2_3_STABLE.md                 │ Charter      │ Linee guida per     │ READ
         │
        │                                                   │              │ patch 2.3           │
         │
        ├───────────────────────────────────────────────────┼──────────────┼─────────────────────┼─────────
        ─┤
-       │ docs/context/STATE_MACHINE_2_3_TEST.md            │ Reference    │ Model stato minimo  │ READ
+       │ docs/context/STATE_MACHINE_2_3_STABLE.md            │ Reference    │ Model stato minimo  │ READ
         │
        ├───────────────────────────────────────────────────┼──────────────┼─────────────────────┼─────────
        ─┤
@@ -849,7 +849,7 @@
        4. Observable state machine (warmup → stable → suspect/degraded → cooldown/blocked/assist)
        5. Misurabile experimentation (telemetria minima, RiskBudget, KPI chiari)
 
-       La linea 2.3_test è stata appena aperta come laboratorio disciplinato sopra la baseline 2.2.2
+       La linea 2.3_stable è stata appena aperta come laboratorio disciplinato sopra la baseline 2.2.2
        refactorizzata consolidata in VM. La patch viva corrente (2.3-patch-01) allinea UA e TLS a
        Firefox/135.0, coerente col backend camoufox. Il prossimo passo è validare parita osservabile
        contro 2.2 prima di aprire refinement veri.

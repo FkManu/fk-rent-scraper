@@ -114,7 +114,7 @@ Smoke test bundle:
 ```
 
 Artefatto release utile per consegna locale o release:
-- `dist\affitto_2_3_test_bundle.zip`
+- `dist\affitto_2_3_stable_bundle.zip`
 
 Note runtime bundle:
 - da sorgente resta `runtime`

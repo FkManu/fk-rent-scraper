@@ -1,10 +1,10 @@
 # ROADMAP_NEXT_MILESTONES.md
 
 ## Scopo
-Definire la roadmap operativa iniziale della root `2.3_test`.
+Definire la roadmap operativa iniziale della root `2.3_stable`.
 
 ## Funzione della root
-`2.3_test` non nasce per sostituire subito la `2.2`.
+`2.3_stable` non nasce per sostituire subito la `2.2`.
 
 Serve a:
 - congelare una baseline `2.2 stable` leggibile
@@ -21,7 +21,7 @@ La fase corrente e `line opening / parity freeze`:
 ## Milestone 0 - Cutover Freeze
 
 ### Obiettivo
-Aprire `2.3_test` senza perdere il contesto storico e senza introdurre drift involontari.
+Aprire `2.3_stable` senza perdere il contesto storico e senza introdurre drift involontari.
 
 ### Deliverable
 - nuova root separata
@@ -35,7 +35,7 @@ Chiusa.
 ## Milestone 1 - Parity Validation
 
 ### Obiettivo
-Confermare che `2.3_test` parta osservabilmente allineata alla baseline `2.2`.
+Confermare che `2.3_stable` parta osservabilmente allineata alla baseline `2.2`.
 
 ### Deliverable
 - verifica del working tree ereditato

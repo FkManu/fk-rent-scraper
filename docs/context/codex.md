@@ -1,7 +1,7 @@
 # codex.md
 
 ## Contesto sintetico
-`2.3_test` e la nuova root tecnica aperta sopra la baseline `2.2 stable`.
+`2.3_stable` e la nuova root tecnica aperta sopra la baseline `2.2 stable`.
 
 Il focus immediato non e cambiare il prodotto, ma:
 - congelare bene la memoria della `2.2`

@@ -1,4 +1,4 @@
-# Windows packaging - `2.3_test`
+# Windows packaging - `2.3_stable`
 
 ## Strategia scelta
 
@@ -67,7 +67,7 @@ Output atteso:
 
 - `dist\affitto_gui\affitto_gui.exe`
 - `dist\affitto_gui\affitto_cli.exe`
-- `dist\affitto_2_3_test_bundle.zip`
+- `dist\affitto_2_3_stable_bundle.zip`
 
 Nota stable:
 - la dist resta un artefatto locale di build e non va committata in repo
@@ -101,10 +101,10 @@ $env:AFFITTO_V2_RUNTIME_DIR = "$env:TEMP\\affitto-bundle-runtime"
 .\dist\affitto_gui\affitto_cli.exe validate-config --config "$env:AFFITTO_V2_RUNTIME_DIR\\app_config.json"
 ```
 
-Per distribuire la prima build `2.3_test`:
+Per distribuire la prima build `2.3_stable`:
 
 ```powershell
-Expand-Archive -Path .\dist\affitto_2_3_test_bundle.zip -DestinationPath "$env:TEMP\\affitto-2.3-test"
+Expand-Archive -Path .\dist\affitto_2_3_stable_bundle.zip -DestinationPath "$env:TEMP\\affitto-2.3-stable"
 ```
 
 ## Stato verificato nella fase corrente

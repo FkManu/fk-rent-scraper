@@ -1,10 +1,10 @@
-# STOP_TRIGGERS_2_3_TEST.md
+# STOP_TRIGGERS_2_3_STABLE.md
 
 ## Scopo
-Definire i trigger minimi di stop, freeze o assistenza della linea `2.3_test`.
+Definire i trigger minimi di stop, freeze o assistenza della linea `2.3_stable`.
 
 ## Regola generale
-In `2.3_test` non si insiste per salvare il ciclo a tutti i costi.
+In `2.3_stable` non si insiste per salvare il ciclo a tutti i costi.
 
 Quando il rischio supera il budget, il motore deve:
 - ridurre pressione
@@ -46,6 +46,6 @@ Quando il rischio supera il budget, il motore deve:
 | `run_state=assist_required` | `stop_service` |
 
 ## Nota pratica
-La linea `2.3_test` eredita questi trigger dalla baseline `2.2 stable`.
+La linea `2.3_stable` eredita questi trigger dalla baseline `2.2 stable`.
 
 Le prime patch della nuova linea non dovrebbero cambiare questi contratti senza una motivazione molto esplicita e comparabile.

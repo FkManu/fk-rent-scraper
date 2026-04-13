@@ -1,6 +1,6 @@
 # HISTORY.md
 
-## Patch aperte nella `2.3_test`
+## Patch aperte nella `2.3_stable`
 - `2.3-patch-01` (`2026-03-31`): allineamento UA/TLS Firefox/135.0 + rimozione patch `navigator.deviceMemory`
   - `session_policy.py`: Chrome/134 → Firefox/135.0
   - `render_context.py`: UA aggiornato, deviceMemory rimosso dal template JS
@@ -20,9 +20,9 @@
   - `tests/test_private_only_and_logging.py`: copertura su env marker, gating manuale vs boot, persistenza flag e cleanup stop-flag
   - stato: applicata, test verdi, verifica reale post-reboot ancora da chiudere
 
-## Patch chiuse che definiscono l'apertura della `2.3_test`
+## Patch chiuse che definiscono l'apertura della `2.3_stable`
 - cutover del `2026-03-30`:
-  - nuova root `2.3_test` creata come copia completa di `2.2_test`
+  - nuova root `2.3_stable` creata come copia completa di `2.2_test`
   - archivio interno del contesto `2.2` creato sotto `docs/context/archive/2_2/`
   - archivio interno del workflow Codex `2.2` creato sotto `docs/context/codex/archive/2_2/`
   - documentazione viva riallineata alla nuova linea `2.3`

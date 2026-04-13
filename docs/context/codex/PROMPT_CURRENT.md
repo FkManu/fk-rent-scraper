@@ -1,6 +1,6 @@
 # PROMPT_CURRENT.md
 
-Agisci sul progetto `affitto` nella root `2.3_test`.
+Agisci sul progetto `affitto` nella root `2.3_stable`.
 
 ## Task corrente
 `2.3-patch-01` applicata — soak osservativo in corso.

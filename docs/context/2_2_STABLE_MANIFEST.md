@@ -1,10 +1,10 @@
 # 2_2_STABLE_MANIFEST.md
 
 > DOCUMENTO STORICO DI CUTOVER.
-> In `2.3_test` questo file serve solo come baseline di provenienza.
+> In `2.3_stable` questo file serve solo come baseline di provenienza.
 
 ## Scopo
-Registrare cosa rappresentava la root `2.2_test` al momento dell'apertura di `2.3_test`.
+Registrare cosa rappresentava la root `2.2_test` al momento dell'apertura di `2.3_stable`.
 
 ## Identita storica
 La cartella `2.2_test` aveva ormai il ruolo reale di linea `2.2 stable`, pubblicata come release `2.2.2 refactorizzata`.
@@ -70,6 +70,6 @@ La root:
 - profili browser locali
 
 ## Nota pratica
-`2.3_test` e nata come copia filesystem completa di `2.2_test` per tenere gli ambienti locali separati.
+`2.3_stable` e nata come copia filesystem completa di `2.2_test` per tenere gli ambienti locali separati.
 
 Il perimetro Git pulito della nuova linea deve comunque continuare a escludere runtime, build, dist e virtualenv.

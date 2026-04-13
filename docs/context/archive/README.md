@@ -1,9 +1,9 @@
 # Context Archive
 
-Questa cartella contiene il materiale storico interno alla root `2.3_test`.
+Questa cartella contiene il materiale storico interno alla root `2.3_stable`.
 
 ## Struttura
-- `2_2/` -> snapshot del contesto `2.2` archiviato al momento dell'apertura di `2.3_test`
+- `2_2/` -> snapshot del contesto `2.2` archiviato al momento dell'apertura di `2.3_stable`
 
 ## Regola pratica
 - stato vivo della linea `2.3` -> `docs/context/`

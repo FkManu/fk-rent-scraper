@@ -1,6 +1,6 @@
 # Context Docs
 
-Questa cartella contiene il contesto operativo vivo della linea `2.3_test`.
+Questa cartella contiene il contesto operativo vivo della linea `2.3_stable`.
 
 La linea nasce come copia completa e separata di `2.2_test`, ma con documentazione attiva ripulita e storico `2.2` archiviato.
 
@@ -9,12 +9,12 @@ La linea nasce come copia completa e separata di `2.2_test`, ma con documentazio
 - `NEXT_STEPS.md` -> priorita immediate della linea
 - `ROADMAP_NEXT_MILESTONES.md` -> milestone operative della `2.3`
 - `../repo_summary.md` -> resoconto completo della repo per bootstrap rapido di contesto
-- `2_3_TEST_MANIFEST.md` -> identita e regole della nuova root
-- `STRATEGY_2_3_TEST.md` -> charter strategico della linea
-- `STATE_MACHINE_2_3_TEST.md` -> modello di stato ereditato e confermato
-- `STOP_TRIGGERS_2_3_TEST.md` -> trigger minimi di stop e assistenza
-- `EXPERIMENT_PLAN_2_3_TEST.md` -> telemetria, KPI e template esperimenti
-- `PROMOTION_GATE_2_3_TEST.md` -> criteri minimi per eventuale promozione
+- `2_3_STABLE_MANIFEST.md` -> identita e regole della nuova root
+- `STRATEGY_2_3_STABLE.md` -> charter strategico della linea
+- `STATE_MACHINE_2_3_STABLE.md` -> modello di stato ereditato e confermato
+- `STOP_TRIGGERS_2_3_STABLE.md` -> trigger minimi di stop e assistenza
+- `EXPERIMENT_PLAN_2_3_STABLE.md` -> telemetria, KPI e template esperimenti
+- `PROMOTION_GATE_2_3_STABLE.md` -> criteri minimi per eventuale promozione
 
 ## Documenti per agenti
 - `codex.md` -> entrypoint sintetico
@@ -27,7 +27,7 @@ La linea nasce come copia completa e separata di `2.2_test`, ma con documentazio
 
 ## Baseline e storico utile
 - `2_1_STABLE_MANIFEST.md` -> baseline storica di provenienza lontana
-- `2_2_STABLE_MANIFEST.md` -> baseline immediata da cui nasce `2.3_test`
+- `2_2_STABLE_MANIFEST.md` -> baseline immediata da cui nasce `2.3_stable`
 - `codex/REVIEW_2_1_STABLE.md` -> review storica baseline `2.1`
 - `codex/REVIEW_2_2_STABLE.md` -> review di chiusura della linea `2.2`
 - `codex/TASK_*.md` -> task storici utili come reference, non come stato corrente
@@ -41,13 +41,13 @@ La linea nasce come copia completa e separata di `2.2_test`, ma con documentazio
 2. `NEXT_STEPS.md`
 3. `codex/OUTPUT_CURRENT.md`
 4. `../repo_summary.md`
-5. `STRATEGY_2_3_TEST.md`
-6. `STATE_MACHINE_2_3_TEST.md`
-7. `EXPERIMENT_PLAN_2_3_TEST.md`
-8. `STOP_TRIGGERS_2_3_TEST.md`
-9. `PROMOTION_GATE_2_3_TEST.md`
+5. `STRATEGY_2_3_STABLE.md`
+6. `STATE_MACHINE_2_3_STABLE.md`
+7. `EXPERIMENT_PLAN_2_3_STABLE.md`
+8. `STOP_TRIGGERS_2_3_STABLE.md`
+9. `PROMOTION_GATE_2_3_STABLE.md`
 
 ## Nota pratica
-- `2.3_test` parte con codice osservabilmente allineato alla `2.2.2 refactorizzata`.
+- `2.3_stable` parte con codice osservabilmente allineato alla `2.2.2 refactorizzata`.
 - il backend operativo resta `camoufox`.
 - lo storico `2.2` resta consultabile, ma non va usato come stato vivo.

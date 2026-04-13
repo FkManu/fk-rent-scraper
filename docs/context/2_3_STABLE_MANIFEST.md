@@ -1,10 +1,10 @@
-# 2_3_TEST_MANIFEST.md
+# 2_3_STABLE_MANIFEST.md
 
 ## Scopo
-Descrivere cosa rappresenta oggi la root `2.3_test`.
+Descrivere cosa rappresenta oggi la root `2.3_stable`.
 
 ## Identita attuale
-`2.3_test` nasce come copia locale completa di `2.2_test` al momento in cui la linea `2.2` viene considerata pronta a diventare stable.
+`2.3_stable` nasce come copia locale completa di `2.2_test` al momento in cui la linea `2.2` viene considerata pronta a diventare stable.
 
 La root quindi e:
 - un ambiente locale separato
@@ -24,7 +24,7 @@ Nel perimetro Git pulito della linea, invece, restano fuori:
 - dump temporanei
 - artifact diagnostici locali
 
-## Cosa fa parte della linea `2.3_test`
+## Cosa fa parte della linea `2.3_stable`
 - codice sorgente
 - test
 - script
@@ -34,7 +34,7 @@ Nel perimetro Git pulito della linea, invece, restano fuori:
 - archivio storico minimo della linea `2.2`
 
 ## Cosa non significa ancora
-`2.3_test` al momento del taglio:
+`2.3_stable` al momento del taglio:
 - non e ancora una nuova release
 - non introduce automaticamente nuove feature
 - non ridefinisce da sola la baseline shipping
@@ -45,12 +45,12 @@ All'apertura della root il comportamento del codice e ereditato da `2.2.2 refact
 - `docs/context/README.md`
 - `docs/context/HANDOFF.md`
 - `docs/context/NEXT_STEPS.md`
-- `docs/context/2_3_TEST_MANIFEST.md`
+- `docs/context/2_3_STABLE_MANIFEST.md`
 - `docs/context/codex/OUTPUT_CURRENT.md`
 - `docs/risk_scoring_e_griglia_segnali_antibot.md`
 
 ## Nota pratica
-Lo stato vivo della linea `2.3_test` va letto nei markdown attivi.
+Lo stato vivo della linea `2.3_stable` va letto nei markdown attivi.
 
 Lo stato storico di provenienza `2.2` e stato archiviato in:
 - `docs/context/archive/2_2/`
